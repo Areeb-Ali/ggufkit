@@ -28,7 +28,7 @@ from ggufkit.verify import comma_list
 
 if TYPE_CHECKING:
     import argparse
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
     from gguf import GGUFEndian
     from gguf.gguf_reader import ReaderField, ReaderTensor
@@ -177,6 +177,84 @@ class NumericStats:
         }
 
 
+def iter_decoded_chunks(
+    ta: ReaderTensor,
+    tb: ReaderTensor,
+    endian_a: GGUFEndian,
+    endian_b: GGUFEndian,
+    *,
+    chunk_bytes: int = NUMERIC_CHUNK_BYTES,
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    """Yield matching float32 slices of two same-shape tensors as 2-D ``(rows, ne0)`` arrays.
+
+    Slicing follows the leading numpy axis, so quantization blocks are never split and at most
+    one chunk of each tensor is decoded at a time. Tensors with more than two dimensions (MoE
+    expert stacks) are flattened to rows of their innermost dimension.
+    """
+    ne0 = int(ta.shape[0]) if len(ta.shape) else 1
+    if ta.data.ndim <= 1:
+        yield (
+            to_f32(ta, endian_a).reshape(-1, ne0),
+            to_f32(tb, endian_b).reshape(-1, ne0),
+        )
+        return
+    lead = int(ta.data.shape[0])
+    elems_per_lead = int(ta.n_elements) // max(lead, 1)
+    per_chunk = max(1, chunk_bytes // max(elems_per_lead * 4 * 2, 1))
+    for start in range(0, lead, per_chunk):
+        sl = slice(start, min(lead, start + per_chunk))
+        yield (
+            to_f32(ta, endian_a, rows=sl).reshape(-1, ne0),
+            to_f32(tb, endian_b, rows=sl).reshape(-1, ne0),
+        )
+
+
+class ErrorAccumulator:
+    """Running error statistics between two arrays fed in chunks."""
+
+    def __init__(self) -> None:
+        self.n = 0
+        self.sum_sq_diff = 0.0
+        self.sum_abs_diff = 0.0
+        self.sum_sq_a = 0.0
+        self.sum_sq_b = 0.0
+        self.dot = 0.0
+        self.max_abs = 0.0
+
+    def add(self, x: np.ndarray, y: np.ndarray) -> None:
+        x64 = x.astype(np.float64, copy=False).ravel()
+        y64 = y.astype(np.float64, copy=False).ravel()
+        d = x64 - y64
+        self.n += int(d.size)
+        self.sum_sq_diff += float(np.dot(d, d))
+        self.sum_abs_diff += float(np.abs(d).sum())
+        self.max_abs = max(self.max_abs, float(np.abs(d).max(initial=0.0)))
+        self.sum_sq_a += float(np.dot(x64, x64))
+        self.sum_sq_b += float(np.dot(y64, y64))
+        self.dot += float(np.dot(x64, y64))
+
+    def finish(self, stats: NumericStats) -> NumericStats:
+        n = self.n
+        stats.mse = self.sum_sq_diff / n if n else 0.0
+        stats.rmse = math.sqrt(stats.mse)
+        stats.max_abs = self.max_abs
+        stats.mean_abs = self.sum_abs_diff / n if n else 0.0
+        stats.rel_l2 = math.sqrt(self.sum_sq_diff / self.sum_sq_a) if self.sum_sq_a > 0 else None
+        denom = math.sqrt(self.sum_sq_a) * math.sqrt(self.sum_sq_b)
+        stats.cosine = self.dot / denom if denom > 0 else None
+        return stats
+
+
+def comparable(ta: ReaderTensor, tb: ReaderTensor) -> str | None:
+    """Return why two tensors cannot be compared numerically, or None if they can."""
+    if [int(d) for d in ta.shape] != [int(d) for d in tb.shape]:
+        return "shape differs"
+    for t in (ta, tb):
+        if not can_dequantize(t.tensor_type):
+            return f"cannot decode {t.tensor_type.name}"
+    return None
+
+
 def numeric_diff(
     ta: ReaderTensor,
     tb: ReaderTensor,
@@ -187,48 +265,13 @@ def numeric_diff(
 ) -> NumericStats:
     """Error statistics between two tensors of the same shape, decoded to float32 in chunks."""
     stats = NumericStats(ta.name, ta.tensor_type.name, tb.tensor_type.name, n=int(ta.n_elements))
-    if [int(d) for d in ta.shape] != [int(d) for d in tb.shape]:
-        stats.skipped = "shape differs"
+    stats.skipped = comparable(ta, tb)
+    if stats.skipped:
         return stats
-    for t in (ta, tb):
-        if not can_dequantize(t.tensor_type):
-            stats.skipped = f"cannot decode {t.tensor_type.name}"
-            return stats
-
-    sum_sq_diff = sum_abs_diff = sum_sq_a = sum_sq_b = dot = 0.0
-    max_abs = 0.0
-
-    def accumulate(x: np.ndarray, y: np.ndarray) -> None:
-        nonlocal sum_sq_diff, sum_abs_diff, sum_sq_a, sum_sq_b, dot, max_abs
-        x64 = x.astype(np.float64, copy=False).ravel()
-        y64 = y.astype(np.float64, copy=False).ravel()
-        d = x64 - y64
-        sum_sq_diff += float(np.dot(d, d))
-        sum_abs_diff += float(np.abs(d).sum())
-        max_abs = max(max_abs, float(np.abs(d).max(initial=0.0)))
-        sum_sq_a += float(np.dot(x64, x64))
-        sum_sq_b += float(np.dot(y64, y64))
-        dot += float(np.dot(x64, y64))
-
-    if ta.data.ndim <= 1:
-        accumulate(to_f32(ta, endian_a), to_f32(tb, endian_b))
-    else:
-        rows = int(ta.data.shape[0])
-        elems_per_row = int(ta.n_elements) // max(rows, 1)
-        rows_per_chunk = max(1, chunk_bytes // max(elems_per_row * 4 * 2, 1))
-        for start in range(0, rows, rows_per_chunk):
-            sl = slice(start, min(rows, start + rows_per_chunk))
-            accumulate(to_f32(ta, endian_a, rows=sl), to_f32(tb, endian_b, rows=sl))
-
-    n = stats.n
-    stats.mse = sum_sq_diff / n if n else 0.0
-    stats.rmse = math.sqrt(stats.mse)
-    stats.max_abs = max_abs
-    stats.mean_abs = sum_abs_diff / n if n else 0.0
-    stats.rel_l2 = math.sqrt(sum_sq_diff / sum_sq_a) if sum_sq_a > 0 else None
-    denom = math.sqrt(sum_sq_a) * math.sqrt(sum_sq_b)
-    stats.cosine = dot / denom if denom > 0 else None
-    return stats
+    acc = ErrorAccumulator()
+    for x, y in iter_decoded_chunks(ta, tb, endian_a, endian_b, chunk_bytes=chunk_bytes):
+        acc.add(x, y)
+    return acc.finish(stats)
 
 
 def _fmt(x: float | None, width: int = 10) -> str:
