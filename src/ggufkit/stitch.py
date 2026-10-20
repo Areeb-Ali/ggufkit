@@ -1,144 +1,151 @@
-#!/usr/bin/env python3
+"""Stitch the metadata of one GGUF file onto the tensors of another.
+
+This is KerfuffleV2's ``gguf-frankenstein`` rewritten against the current ``GGUFWriter``
+API. Give it a metadata source and, optionally, a tensor source, and it writes a new file with
+the key/value metadata of the first and the tensor descriptors and data of the second. Without
+a tensor source the result is a vocab-only model: just the metadata, which is a usable base
+for training or for further stitching.
+"""
+
 from __future__ import annotations
 
-import argparse
-import sys
-from io import BytesIO
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
-from gguf.constants import GGUFValueType, Keys
-from gguf.gguf_reader import GGUFReader
-from gguf.gguf_writer import GGUFWriter
+from gguf import GGUFEndian, GGUFValueType, GGUFWriter
+from gguf.constants import Keys
+
+from ggufkit.canon import UnsupportedModelError
+from ggufkit.model import Model, open_model
+
+if TYPE_CHECKING:
+    import argparse
+    from collections.abc import Callable, Iterable
+
+Logger = "Callable[[str], None]"
 
 
-# ruff: noqa: SLF001
-def go(args: argparse.Namespace) -> None:
-    print(f"* Loading metadata source: {args.metadata}")
-    md_reader = GGUFReader(args.metadata, "c")
-    if args.tensors is not None:
-        print(f"* Loading tensor data source: {args.metadata}")
-        td_reader: None | GGUFReader = GGUFReader(args.tensors, "c")
-    else:
-        td_reader = None
-        print("* No tensor data source specified, output will be a vocab-only model.")
-    arch = str(
-        md_reader.fields[Keys.General.ARCHITECTURE].parts[-1].tobytes(),
-        encoding="utf-8",
-    )
-    gw = GGUFWriter(args.output, arch, use_temp_file=False)
-    print("* Adding metadata: ", end="")
-    for kv in md_reader.fields.values():
-        if (
-            kv.name in ("GGUF.version", "GGUF.tensor_count", "GGUF.kv_count")
-            or not kv.types
-        ):
-            # Not real metadata fields.
+def copy_metadata(writer: GGUFWriter, model: Model, *, skip: Iterable[str] = ()) -> list[str]:
+    """Add every metadata entry of ``model`` to ``writer``; return the names copied.
+
+    ``general.architecture`` is skipped because the writer adds it itself. Arrays nested more
+    than one level deep are refused: the reader flattens them, so they cannot be copied
+    faithfully.
+    """
+    skipped = set(skip) | {Keys.General.ARCHITECTURE}
+    copied: list[str] = []
+    for f in model.metadata_fields():
+        if f.name in skipped:
             continue
-        if kv.name == Keys.General.ARCHITECTURE:
-            # Gets added automatically.
-            continue
-        print(f"{kv.name!r}, ", end="")
-        sys.stdout.flush()
-        if len(kv.types) > 2 or (
-            len(kv.types) == 2 and kv.types[1] == GGUFValueType.ARRAY
-        ):
-            msg = f"Cannot handle types in field {kv.name!r}: {kv.types}"
-            raise ValueError(msg)
-        if kv.types[0] == GGUFValueType.ARRAY:
-            itype = kv.types[1]
-            gw.add_key(kv.name)
-            chunk = BytesIO()
-            chunk.write(gw._pack("I", GGUFValueType.ARRAY))
-            chunk.write(gw._pack("I", itype))
-            chunk.write(gw._pack("Q", len(kv.data)))
-            if itype == GGUFValueType.STRING:
-                for di in kv.data:
-                    sval = kv.parts[di].tobytes()
-                    chunk.write(gw._pack("Q", len(sval)))
-                    chunk.write(sval)
+        vtype = f.types[0]
+        try:
+            if vtype == GGUFValueType.ARRAY:
+                if len(f.types) != 2:
+                    msg = f"Cannot copy nested array metadata entry {f.name!r}"
+                    raise UnsupportedModelError(msg)
+                writer.add_key_value(f.name, f.contents(), vtype, sub_type=f.types[1])
             else:
-                for di in kv.data:
-                    chunk.write(kv.parts[di].tobytes())
-            gw.kv_data += chunk.getvalue()
-            del chunk
-            gw.kv_data_count += 1
-        elif kv.types[0] == GGUFValueType.STRING:
-            gw.add_string(
-                kv.name,
-                str(
-                    kv.parts[kv.data[0]].tobytes(),
-                    encoding="utf-8",
-                ),
-            )
-        else:
-            gw.add_key(kv.name)
-            gw.add_val(kv.parts[kv.data[0]][0], kv.types[0])
-    print()
-    if td_reader is not None:
-        print("* Adding tensor metadata: ", end="")
-        for tensor in td_reader.tensors:
-            print(f"{tensor.name!r}, ", end="")
-            gw.add_tensor_info(
-                tensor.name,
-                [int(val) for val in reversed(tensor.shape)],
-                np.dtype(np.float32),
-                int(tensor.n_bytes),
-                raw_dtype=tensor.tensor_type,
-            )
-        print()
-    print("* Writing metadata")
-    gw.write_header_to_file()
-    gw.write_kv_data_to_file()
-    if td_reader is not None:
-        gw.write_ti_data_to_file()
-        print("* Writing tensor data")
-        n_tensors = len(td_reader.tensors)
-        for idx, tensor in enumerate(td_reader.tensors, 1):
-            prettysize = f"{tensor.n_bytes / (1024 * 1024):.2f}"
-            print(
-                f"  {idx:4}/{n_tensors:4} | type:{tensor.tensor_type.name:6} | size:{prettysize:>8} MiB | name:{tensor.name}",
-            )
-            gw.write_tensor_data(tensor.data)
-    gw.close()
-    print("* Successful completion.")
+                writer.add_key_value(f.name, f.contents(), vtype)
+        except ValueError as e:
+            msg = f"Cannot copy metadata entry {f.name!r}: {e}"
+            raise UnsupportedModelError(msg) from e
+        copied.append(f.name)
+    return copied
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Model combining utility for GGUF files",
-    )
-    parser.add_argument(
-        "--metadata",
-        required=True,
-        type=str,
-        help="GGUF format file to use for metadata",
-    )
-    parser.add_argument(
-        "--tensors",
-        type=str,
-        help="GGUF format file to use for tensor data, if not specified you'll end up with a vocab-only result",
-    )
-    parser.add_argument(
-        "--output",
-        required=True,
-        type=str,
-        help="GGUF format output file",
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Force overwriting the output file if it already exists",
-    )
-    args = parser.parse_args(None if len(sys.argv) > 1 else ["--help"])
-    if args.output in (args.metadata, args.tensors):
-        print("! Cannot overwrite input files with --out", file=sys.stderr)
-        sys.exit(1)
-    if not args.force and Path(args.output).exists():
-        print("! Output file already exists", file=sys.stderr)
-        sys.exit(1)
-    go(args)
+def stitch(
+    metadata: str | Path,
+    tensors: str | Path | None,
+    output: str | Path,
+    *,
+    force: bool = False,
+    log: Callable[[str], None] | None = None,
+) -> Path:
+    """Write ``output`` with the metadata of ``metadata`` and the tensors of ``tensors``."""
+    say = log or (lambda _msg: None)
+    output = Path(output)
+    inputs = {Path(metadata).resolve()}
+    if tensors is not None:
+        inputs.add(Path(tensors).resolve())
+    if output.resolve() in inputs:
+        msg = "The output file must differ from the input files"
+        raise ValueError(msg)
+    if output.exists() and not force:
+        msg = f"{output} already exists (use --force to overwrite)"
+        raise FileExistsError(msg)
+
+    say(f"* Metadata source: {metadata}")
+    with open_model(metadata) as md:
+        arch = md.architecture
+        if arch is None:
+            msg = "The metadata source has no general.architecture entry"
+            raise UnsupportedModelError(msg)
+        td: Model | None = None
+        try:
+            if tensors is not None:
+                say(f"* Tensor source: {tensors}")
+                td = open_model(tensors)
+                if td.endianess != GGUFEndian.LITTLE:
+                    msg = "Big-endian tensor sources are not supported"
+                    raise UnsupportedModelError(msg)
+            else:
+                say("* No tensor source given: writing a vocab-only model")
+
+            writer = GGUFWriter(output, arch, use_temp_file=False)
+            copied = copy_metadata(writer, md)
+            say(f"* Copied {len(copied)} metadata entries")
+
+            if td is not None:
+                for t in td.tensors:
+                    writer.add_tensor_info(
+                        t.name,
+                        [int(v) for v in reversed(t.shape)],
+                        np.dtype(np.float32),
+                        int(t.n_bytes),
+                        raw_dtype=t.tensor_type,
+                    )
+
+            writer.write_header_to_file()
+            writer.write_kv_data_to_file()
+            writer.write_ti_data_to_file()
+            if td is not None:
+                n = len(td.tensors)
+                for i, t in enumerate(td.tensors, 1):
+                    size = t.n_bytes / (1024 * 1024)
+                    say(f"  {i:4}/{n:<4} {t.tensor_type.name:<7} {size:9.2f} MiB  {t.name}")
+                    writer.write_tensor_data(t.data, tensor_endianess=GGUFEndian.LITTLE)
+            writer.close()
+        finally:
+            if td is not None:
+                td.close()
+    say(f"* Wrote {output}")
+    return output
 
 
-if __name__ == "__main__":
-    main()
+def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser(
+        "stitch",
+        help="combine the metadata of one GGUF file with the tensors of another",
+        description=(
+            "Write a new GGUF file with the key/value metadata of --metadata and the tensors of "
+            "--tensors. Omit --tensors to get a vocab-only model containing just the metadata."
+        ),
+    )
+    p.add_argument("--metadata", required=True, type=Path, help="GGUF file to take metadata from")
+    p.add_argument("--tensors", type=Path, help="GGUF file to take tensor data from")
+    p.add_argument("-o", "--output", required=True, type=Path, help="GGUF file to write")
+    p.add_argument("--force", action="store_true", help="overwrite the output if it exists")
+    p.add_argument("-q", "--quiet", action="store_true", help="do not report progress")
+    p.set_defaults(func=run)
+
+
+def run(args: argparse.Namespace) -> int:
+    stitch(
+        args.metadata,
+        args.tensors,
+        args.output,
+        force=args.force,
+        log=None if args.quiet else print,
+    )
+    return 0

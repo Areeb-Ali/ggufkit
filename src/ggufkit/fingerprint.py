@@ -1,146 +1,256 @@
-#!/usr/bin/env python3
+"""Order-independent content fingerprints for GGUF models (``ggufkit-fp/1``).
+
+A fingerprint has three independent parts, so you can tell *what* changed between two files:
+
+- ``kv``: the metadata, sorted by key, so reordering or re-saving does not change it;
+- ``tensor_info``: every tensor's name, shape and quantization type, sorted by name;
+- ``weights``: the stored bytes of every tensor, as a multiset, so renaming or reordering
+  tensors does not change it (renames show up in ``tensor_info`` instead).
+
+``overall`` binds the three together. This is a rewrite of KerfuffleV2's ``gguf-checksum``
+on a documented byte format; see ``docs/FINGERPRINT.md``.
+"""
+
 from __future__ import annotations
 
-import argparse
+import json
+import os
 import sys
-from hashlib import sha256
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from gguf.gguf_reader import GGUFReader, ReaderField, ReaderTensor
+from ggufkit import canon
+from ggufkit.model import open_model
+
+if TYPE_CHECKING:
+    import argparse
+    from collections.abc import Callable
+
+    from gguf.gguf_reader import ReaderTensor
+
+    from ggufkit.model import Model
 
 
-def go(args: argparse.Namespace) -> None:
-    reader = GGUFReader(args.model, "r")
-    metadata_hash = sha256()
-    kv_hash = sha256()
-    tensor_info_hash = sha256()
-    tensor_data_hash = sha256()
-    overall_hash = sha256()
-    result: dict[str, Any] = {}
-    if args.hash_individual_kvs:
-        result["kvs"] = {}
-    if args.hash_individual_tensors:
-        result["tensors"] = {}
-    if not args.skip_kvs:
+@dataclass(frozen=True)
+class TensorFingerprint:
+    name: str
+    type: str
+    shape: tuple[int, ...]
+    info: str
+    data: str | None
 
-        def kv_sortfun(field: ReaderField) -> str:
-            return field.name
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": self.type, "shape": list(self.shape), "info": self.info, "data": self.data}
 
-        kvs = sorted(reader.fields.values(), key=kv_sortfun)
-        for field in kvs:
-            if field.name.startswith("__SPARE"):
-                continue
-            curr_kv_hash = sha256()
-            for part in field.parts:
-                pb = part.tobytes()
-                metadata_hash.update(pb)
-                kv_hash.update(pb)
-                if args.hash_individual_kvs:
-                    curr_kv_hash.update(pb)
-                overall_hash.update(pb)
-            if args.hash_individual_kvs:
-                if args.json:
-                    result["kvs"][field.name] = curr_kv_hash.hexdigest()
-                else:
-                    print(f"HASH {'KV':15} {curr_kv_hash.hexdigest()} {field.name!r}")
-    if not args.skip_tensors:
+    @classmethod
+    def from_dict(cls, name: str, d: dict[str, Any]) -> TensorFingerprint:
+        return cls(
+            name=name,
+            type=str(d["type"]),
+            shape=tuple(int(x) for x in d["shape"]),
+            info=str(d["info"]),
+            data=None if d.get("data") is None else str(d["data"]),
+        )
 
-        def tensor_sortfun(tensor: ReaderTensor) -> str:
-            return tensor.name
 
-        tis = sorted(reader.tensors, key=tensor_sortfun)
-        for tensor in tis:
-            # Skip the offset
-            for part in tensor.field.parts[:-1]:
-                pb = part.tobytes()
-                metadata_hash.update(pb)
-                tensor_info_hash.update(pb)
-                overall_hash.update(pb)
-        if not args.skip_tensor_data:
-            for tensor in tis:
-                tb = tensor.data.tobytes()
-                tensor_data_hash.update(tb)
-                overall_hash.update(tb)
-                if args.hash_individual_tensors:
-                    tensor_hash = sha256()
-                    tensor_hash.update(tb)
-                    if args.json:
-                        result["tensors"][tensor.name] = tensor_hash.hexdigest()
-                    else:
-                        print(
-                            f"HASH {'TENSOR':15} {tensor_hash.hexdigest()} {tensor.name!r}",
-                        )
-                elif not args.json:
-                    print(
-                        f"HASH {'RUNNING':15} {overall_hash.hexdigest()} {tensor.name!r}",
-                    )
-    if not args.skip_kvs:
-        if args.json:
-            result["kv_metadata"] = kv_hash.hexdigest()
-        else:
-            print(f"HASH {'KV_METADATA':15} {kv_hash.hexdigest()}")
-    if not args.skip_tensors:
-        if args.json:
-            result["tensor_metadata"] = tensor_info_hash.hexdigest()
-            if not args.skip_tensor_data:
-                result["tensor_data"] = tensor_data_hash.hexdigest()
-        else:
-            print(f"HASH {'TENSOR_METADATA':15} {tensor_info_hash.hexdigest()}")
-    if not (args.skip_kvs and args.skip_tensors):
-        if args.json:
-            result["metadata"] = metadata_hash.hexdigest()
-        else:
-            print(f"HASH {'METADATA':15} {metadata_hash.hexdigest()}")
-    if not (args.skip_tensors or args.skip_tensor_data):
-        if args.json:
-            result["tensor_data"] = tensor_data_hash.hexdigest()
-        else:
-            print(f"HASH {'TENSOR_DATA':15} {tensor_data_hash.hexdigest()}")
+@dataclass
+class Fingerprint:
+    spec: str
+    kv: str
+    tensor_info: str
+    weights: str | None
+    overall: str | None
+    n_kv: int
+    n_tensors: int
+    kvs: dict[str, str] | None = None
+    tensors: dict[str, TensorFingerprint] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "spec": self.spec,
+            "kv": self.kv,
+            "tensor_info": self.tensor_info,
+            "weights": self.weights,
+            "overall": self.overall,
+            "n_kv": self.n_kv,
+            "n_tensors": self.n_tensors,
+        }
+        if self.kvs is not None:
+            out["kvs"] = dict(self.kvs)
+        if self.tensors is not None:
+            out["tensors"] = {name: t.to_dict() for name, t in self.tensors.items()}
+        return out
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Fingerprint:
+        tensors = d.get("tensors")
+        return cls(
+            spec=str(d["spec"]),
+            kv=str(d["kv"]),
+            tensor_info=str(d["tensor_info"]),
+            weights=None if d.get("weights") is None else str(d["weights"]),
+            overall=None if d.get("overall") is None else str(d["overall"]),
+            n_kv=int(d["n_kv"]),
+            n_tensors=int(d["n_tensors"]),
+            kvs=None if d.get("kvs") is None else {str(k): str(v) for k, v in d["kvs"].items()},
+            tensors=None
+            if tensors is None
+            else {str(k): TensorFingerprint.from_dict(str(k), v) for k, v in tensors.items()},
+        )
+
+
+def default_jobs() -> int:
+    return max(1, min(4, os.cpu_count() or 1))
+
+
+def _hash_tensor_data(
+    tensors: list[ReaderTensor],
+    file_endianess: Any,
+    jobs: int,
+    on_tensor: Callable[[ReaderTensor, bytes], None] | None,
+) -> dict[str, bytes]:
+    def work(t: ReaderTensor) -> tuple[ReaderTensor, bytes]:
+        return t, canon.tensor_data_digest(t, file_endianess)
+
+    out: dict[str, bytes] = {}
+    if jobs <= 1 or len(tensors) <= 1:
+        results = map(work, tensors)
+        for t, digest in results:
+            out[t.name] = digest
+            if on_tensor is not None:
+                on_tensor(t, digest)
+        return out
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        for t, digest in pool.map(work, tensors):
+            out[t.name] = digest
+            if on_tensor is not None:
+                on_tensor(t, digest)
+    return out
+
+
+def fingerprint(
+    model: Model,
+    *,
+    data: bool = True,
+    per_tensor: bool = True,
+    per_kv: bool = False,
+    jobs: int = 1,
+    on_tensor: Callable[[ReaderTensor, bytes], None] | None = None,
+) -> Fingerprint:
+    """Compute the ``ggufkit-fp/1`` fingerprint of ``model``.
+
+    ``data=False`` skips reading tensor bytes, which makes the call instant on any model
+    size but leaves ``weights`` and ``overall`` unset.
+    """
+    fields = model.metadata_fields()
+    kv_digests = {f.name: canon.kv_digest(f) for f in fields}
+    kv = canon.combine(kv_digests[name] for name in canon.sorted_by_name(kv_digests))
+
+    ti_digests = {t.name: canon.tensor_info_digest(t) for t in model.tensors}
+    tensor_info = canon.combine(ti_digests[name] for name in canon.sorted_by_name(ti_digests))
+
+    data_digests: dict[str, bytes] | None = None
+    weights: bytes | None = None
+    overall: bytes | None = None
+    if data:
+        data_digests = _hash_tensor_data(model.tensors, model.endianess, jobs, on_tensor)
+        weights = canon.combine(sorted(data_digests.values()))
+        overall = canon.overall_digest(kv, tensor_info, weights)
+
+    tensors: dict[str, TensorFingerprint] | None = None
+    if per_tensor:
+        tensors = {
+            t.name: TensorFingerprint(
+                name=t.name,
+                type=t.tensor_type.name,
+                shape=tuple(int(d) for d in t.shape),
+                info=ti_digests[t.name].hex(),
+                data=None if data_digests is None else data_digests[t.name].hex(),
+            )
+            for t in model.tensors
+        }
+
+    return Fingerprint(
+        spec=canon.SPEC_ID,
+        kv=kv.hex(),
+        tensor_info=tensor_info.hex(),
+        weights=None if weights is None else weights.hex(),
+        overall=None if overall is None else overall.hex(),
+        n_kv=len(fields),
+        n_tensors=len(model.tensors),
+        kvs={name: kv_digests[name].hex() for name in canon.sorted_by_name(kv_digests)}
+        if per_kv
+        else None,
+        tensors=tensors,
+    )
+
+
+def format_text(fp: Fingerprint) -> list[str]:
+    lines: list[str] = []
+    if fp.kvs:
+        lines.extend(f"KV       {digest} {name}" for name, digest in fp.kvs.items())
+    if fp.tensors:
+        for name in canon.sorted_by_name(fp.tensors):
+            t = fp.tensors[name]
+            shape = "x".join(str(d) for d in t.shape)
+            lines.append(f"TENSOR   {t.data or t.info} {name} [{t.type} {shape}]")
+    lines.append(f"{'kv':<12} {fp.kv}")
+    lines.append(f"{'tensor_info':<12} {fp.tensor_info}")
+    if fp.weights is not None:
+        lines.append(f"{'weights':<12} {fp.weights}")
+    if fp.overall is not None:
+        lines.append(f"{'overall':<12} {fp.overall}")
+    lines.append(f"{'spec':<12} {fp.spec}  ({fp.n_kv} metadata entries, {fp.n_tensors} tensors)")
+    return lines
+
+
+def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser(
+        "fingerprint",
+        help="content hashes that ignore metadata order, tensor order and sharding",
+        description=(
+            "Compute the ggufkit-fp/1 fingerprint of a GGUF model: separate SHA-256 digests for "
+            "the metadata, the tensor descriptors and the weights, plus one overall digest. "
+            "Unlike sha256sum, the result does not change when metadata is reordered, when the "
+            "file is split into shards, or when tensors are stored in a different order."
+        ),
+    )
+    p.add_argument("model", type=Path, help="GGUF file, or any shard of a split model")
+    p.add_argument("--json", action="store_true", help="print the fingerprint as JSON")
+    p.add_argument("-o", "--output", type=Path, help="also write the JSON fingerprint to this file")
+    p.add_argument(
+        "--no-data",
+        action="store_true",
+        help="skip tensor bytes (instant, but no weights/overall digest)",
+    )
+    p.add_argument("--no-per-tensor", action="store_true", help="omit per-tensor digests")
+    p.add_argument("--per-kv", action="store_true", help="include a digest per metadata entry")
+    p.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=default_jobs(),
+        help="threads used to hash tensors (default: %(default)s)",
+    )
+    p.set_defaults(func=run)
+
+
+def run(args: argparse.Namespace) -> int:
+    with open_model(args.model) as model:
+        fp = fingerprint(
+            model,
+            data=not args.no_data,
+            per_tensor=not args.no_per_tensor,
+            per_kv=args.per_kv,
+            jobs=max(1, args.jobs),
+        )
+    if args.output is not None:
+        args.output.write_text(json.dumps(fp.to_dict(), indent=2) + "\n", encoding="utf-8")
     if args.json:
-        import json
-
-        result["overall"] = overall_hash.hexdigest()
-        json.dump(result, sys.stdout)
+        json.dump(fp.to_dict(), sys.stdout, indent=2)
+        sys.stdout.write("\n")
     else:
-        print(f"HASH {'OVERALL':15} {overall_hash.hexdigest()}")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Checksum utility for GGUF files")
-    parser.add_argument(
-        "model",
-        type=str,
-        help="GGUF format model filename",
-    )
-    parser.add_argument(
-        "--skip-kvs",
-        action="store_true",
-        help="Skip KV metadata in result",
-    )
-    parser.add_argument(
-        "--skip-tensors",
-        action="store_true",
-        help="Skip tensors in result, implies --skip-tensor-data as well",
-    )
-    parser.add_argument(
-        "--skip-tensor-data",
-        action="store_true",
-        help="Skip tensor data in result",
-    )
-    parser.add_argument(
-        "--hash-individual-kvs",
-        action="store_true",
-        help="Include individual KV hashes in result, no effect when --skip-kvs specified",
-    )
-    parser.add_argument(
-        "--hash-individual-tensors",
-        action="store_true",
-        help="Include individual tensor data hashes in result, no effect when --skip-tensors or --skip-tensor-data specified",
-    )
-    parser.add_argument("--json", action="store_true", help="Produce JSON output")
-    args = parser.parse_args(None if len(sys.argv) > 1 else ["--help"])
-    go(args)
-
-
-if __name__ == "__main__":
-    main()
+        sys.stdout.write("\n".join(format_text(fp)) + "\n")
+    return 0
