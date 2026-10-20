@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ggufkit.viz import render
+from ggufkit.viz import errmap, layers, render
 
 if TYPE_CHECKING:
     import argparse
@@ -13,11 +13,13 @@ if TYPE_CHECKING:
 def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "viz",
-        help="render tensors as images",
+        help="render tensors, quantization error and quant mixtures as images",
         description="Visual tools. Requires the 'viz' extra: pip install 'ggufkit[viz]'.",
     )
     vsub = p.add_subparsers(dest="viz_command", metavar="<subcommand>")
     render.add_parser(vsub)
+    errmap.add_parser(vsub)
+    layers.add_parser(vsub)
 
     def show_help(_args: argparse.Namespace) -> int:
         p.print_help()
