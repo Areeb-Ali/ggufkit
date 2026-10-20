@@ -18,4 +18,9 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     )
     vsub = p.add_subparsers(dest="viz_command", metavar="<subcommand>")
     render.add_parser(vsub)
-    p.set_defaults(func=lambda _args: (p.print_help(), 2)[1])
+
+    def show_help(_args: argparse.Namespace) -> int:
+        p.print_help()
+        return 2
+
+    p.set_defaults(func=show_help)

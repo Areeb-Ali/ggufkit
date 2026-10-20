@@ -1,76 +1,150 @@
-# GGUF Tools
+# ggufkit
 
-Random tools and experiments for manipulating or viewing the GGUF file format. See:
+Fingerprint, verify and visualize [GGUF](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md) models.
 
-1. https://github.com/ggerganov/llama.cpp
-2. https://github.com/ggerganov/ggml
+`ggufkit` answers questions a plain file hash cannot:
 
-## Scripts
+- Is this GGUF the same model as that one, even though the bytes differ?
+- Did a re-upload change the weights, or only the metadata?
+- Which tensors changed?
+- What does `blk.17.attn_q.weight` actually look like?
 
-All scripts support using `--help` for information on the commandline options.
+It is built on llama.cpp's own [`gguf`](https://pypi.org/project/gguf/) Python package, so
+every tensor type that package can decode works here too: 26 of them, from `Q4_0` to
+`IQ2_XXS` and `MXFP4`. Sharded models (`-00001-of-00003.gguf`) are handled as one model.
 
-### `gguf-checksum`
+## Why
 
-Allows calculating a model's SHA256 without being affected by the exact order of the fields in the file. It's also possible to get checksums of the individual tensors or metadata fields. **Note**: The overall hash will not match that from tools like `sha256sum` since it is based on a sorted version of the fields. The point of the tool is to allow comparing models in a way where the order of the tensors of fields does not affect the result.
+Model signing ([OpenSSF model-signing](https://github.com/sigstore/model-transparency),
+Sigstore) protects the bytes you were given. It breaks the moment someone fixes a chat
+template in the metadata, and when it breaks it cannot tell you whether the weights changed.
+It also says nothing about whether a community quantization was faithfully built from the
+model it names: a 2026 study of the most-downloaded GGUF repositories on Hugging Face found
+that none record enough build inputs to reproduce the quantization, and
+[Mind the Gap](https://arxiv.org/abs/2505.23786) (ICML 2025) showed weights that behave
+well in full precision and badly after GGUF quantization.
 
-**Examples:**
+The first step is a content identity for GGUF files that survives the edits people
+legitimately make. That is `ggufkit fingerprint`: separate, order-independent SHA-256
+digests for the metadata, the tensor descriptors and the weights, on a documented byte
+format ([docs/FINGERPRINT.md](docs/FINGERPRINT.md)). Manifests, verification and numeric
+diffs build on it (see [Roadmap](#roadmap)).
 
-`gguf-checksum.py model.gguf` — Generate a full checksum for the model, including tensor data. At the end, you'll get a SHA256 for the KV metadata, the tensor metadata, the whole metadata section, the tensor data alone and the overall SHA256 with all sections included. As mentioned, this won't match a SHA256 based only on the raw file content.
+## Install
 
-`gguf-checksum.py --json model.gguf` — Same as above except the output will be in JSON format. Example:
-
-```json
-{ "kv_metadata": "426c351e4437c6084d7b67f0a55aa7ad206ecec619424e49ccb3763ecc47fa4f",
-  "tensor_metadata": "5eb813b667e0a88108f9ea1aae49ca63b416797dc7e871f239acfbfab99a7c78",
-  "tensor_data": "35f22466eb3521e4f121fc6b8deee850ab59dec0342a0ef56c06ace9b7266855",
-  "metadata": "93113a12203aa873da48c594b572d4d2f1e90c2f79ba3c489e97b5d4ee69633a",
-  "overall": "d4838aaca38a8b8742d417b7038f64f195a7f6c2a19db8ca13287ede72132bbc" }
+```sh
+pip install 'ggufkit[viz] @ git+https://github.com/MysterionRise/ggufkit'   # until the first PyPI release
+uv tool install 'ggufkit[viz] @ git+https://github.com/MysterionRise/ggufkit'
 ```
 
-`gguf-checksum.py --hash-individual-kvs --hash-individual-tensors model.gguf` — Same as the first, except you will also get a SHA256 for each individual KV and each tensor's data. Example:
+The `viz` extra pulls in Pillow for image rendering; the core needs only `gguf` and `numpy`.
+Python 3.10 or newer.
 
-```plaintext
-[...]
-HASH KV              60319eb94a7e6ccb90415531d683e4602ea9bc2b9b737458a88a831bd7b898d3 'general.architecture'
-HASH KV              701aaf18cc8024bc5623b098ae765c81357de9b56fae5072b007ad28767e88c7 'general.file_type'
-[...]
-HASH TENSOR          0cc4e78473416068323151762dee07c18a09b796a86b9a8cfafe8a7ac4c7a600 'blk.0.attn_k.weight'
-HASH TENSOR          32e2dd836ba8a3d81a7937456662e181da1f53343f9d11a755ff6b27283c2241 'blk.0.attn_norm.weight'
-HASH TENSOR          dc856d2f9bc97c202a48cb5df2c8951eb68dc7b5c8683d9a9f268c65bc094cf4 'blk.0.attn_output.weight'
+## Quick start
+
+### Fingerprint a model
+
+```console
+$ ggufkit fingerprint Llama-3.2-1B-Q4_K_M.gguf
+TENSOR   3c0f8a…  blk.0.attn_k.weight [Q4_K 2048x512]
+TENSOR   91be02…  blk.0.attn_norm.weight [F32 2048]
+…
+kv           d07bb738a7971e4986babf859eb350353f1ed2672963076f0cf6081cf0641b04
+tensor_info  02c3cc66758bee54878ad0d685409e64aaf44209159c323a0e360f5a55624f64
+weights      c647b9b27a8ca782a8217b596c72b097551fa2dac8cbdcf373d5e93d7d274eef
+overall      420d1bd00ea1dbb6fdc63c7b8e27e832db304314753882d0c1132ea8cf297b61
+spec         ggufkit-fp/1  (26 metadata entries, 147 tensors)
 ```
 
-***
+Three digests, three answers:
 
-### `gguf-frankenstein`
+| `kv` | `tensor_info` | `weights` | meaning |
+|---|---|---|---|
+| same | same | same | the same model |
+| differs | same | same | only metadata changed (names, templates, licence text) |
+| same | differs | same | tensors renamed or retyped in place, bytes untouched |
+| any | any | differs | at least one tensor's bytes changed; the per-tensor lines say which |
 
-You supply an input metadata GGUF file and optionally an input tensor data GGUF file and this utility will stitch the two together into a new GGUF file. When the tensor data file isn't specified, you end up with a vocab-only model that just has the metadata. This could be used for future Frankenstein-ing or training a model with that vocab/metadata as the base.
+Useful flags:
 
-**Examples:**
+- `--json` prints the fingerprint as JSON; `-o fp.json` also writes it to a file.
+- `--no-data` skips the tensor bytes: instant on any model size, gives you `kv` and
+  `tensor_info` only.
+- `--per-kv` adds a digest per metadata entry, so you can see exactly which key changed.
+- `-j 8` hashes tensors on eight threads (reads are memory-mapped and never copied).
 
-`gguf-frankenstein.py --metadata md.gguf --tensor td.gguf --output result.gguf` — Create `result.gguf` with the key/value metadata from `md.gguf` and the tensor data (and tensor metadata) from `td.gguf`.
+Pass any shard of a split model and the whole model is fingerprinted. Splitting or merging
+does not change the result, and neither does llama.cpp's `gguf_new_metadata` (only `kv`
+moves).
 
-`gguf-frankenstein.py --metadata md.gguf --output result.gguf` — Create `result.gguf` with the key/value metadata from `md.gguf`. This will be a vocab-only model that could be used for training.
+### Stitch metadata onto tensors
 
-***
+```sh
+ggufkit stitch --metadata tokenizer-fixed.gguf --tensors model.gguf -o model-fixed.gguf
+ggufkit stitch --metadata model.gguf -o vocab-only.gguf     # metadata only, no tensors
+```
 
-### `gguf-tensor-to-image`
+The result takes every metadata entry from `--metadata` and every tensor from `--tensors`.
+Vocab-only files are handy as a base for training or further stitching.
 
-Despite the name (and repo) this actually can handle Torch models as well if you have Torch Python support installed. Converts a tensor or tensors to an image representation. See the `CFG_` values near the top. Some tensors are more interesting than others. Check out an `attn_q` tensor if you get the chance. Oh baby, there's a lot going on. For GGUF, the script can deal with `F32`, `F16` and `Q8_0` tensors and includes a tiny `Q8_0` quantization/dequantization implementation. For Torch, it supports tensors in `float32`, `float16` and `bfloat16` formats.
+### Look at the weights
 
-Here's what it can look like (little slice of an Orca 3B `attn_q`):
+```sh
+ggufkit viz tensor model.gguf blk.0.attn_q.weight -o attn_q.png
+ggufkit viz tensor model.gguf 'blk.*.attn_q.weight' --match-glob -o imgs/q.png
+ggufkit viz tensor model.gguf token_embd.weight -o embd.png --max-pixels 4000000
+```
 
-![attn_q with no pants on](assets/attn_q_snippet.png)
+Each pixel is one weight: brightness follows magnitude, hue says whether the weight sits
+well below the mean, well above it, or in between. Attention projections have a lot going
+on. A slice of an `attn_q` tensor from a 3B model:
 
- **Examples:**
+![attn_q tensor rendered as an image](assets/attn_q_snippet.png)
 
- `gguf-tensor-to-image.py --output out.png model.gguf output.weight` — Save the `output.weight` tensor in `model.gguf` as `out.png`
+PyTorch checkpoints work too when `torch` is installed (`--model-type torch`).
 
- `gguf-tensor-to-image.py --output out.png model.gguf output.weight token_embd.weight` — Save the specified tensors in `model.gguf` as `output.weight.out.png` and `token_embd.weight.out.png`
+## What a fingerprint proves, and what it does not
 
- `gguf-tensor-to-image.py --output ./imgs/tensor.png model.gguf '*'` — Save all tensors in `model.gguf` like `./imgs/output.weight.tensor.png`. *Note*: Be sure to quote or escape `*` when specifying it as an option.
+A fingerprint proves integrity and equivalence: that two files hold the same metadata,
+descriptors and weights, or exactly which part differs. It does not prove that a quantized
+file was faithfully derived from the full-precision model it names, and it does not prove a
+model is benign. Those need the build inputs (source hash, importance matrix, llama.cpp
+revision, quantize flags) and either a reproduction or a numeric comparison. That is what
+the roadmap is for.
 
-***
+## Roadmap
 
-## Disclaimer
+- `ggufkit manifest`: a JSON provenance record (fingerprint, file hashes, everything the
+  metadata says about origin and licence, the build inputs you supply, and a list of the
+  provenance keys that are missing).
+- `ggufkit verify`: a file against a manifest, or two files against each other, with a
+  one-word verdict (`identical`, `metadata-only`, `tensor-info-only`, `weights-changed`).
+- `ggufkit diff`: metadata diff, tensor-level hash diff, and `--numeric` per-tensor error
+  statistics between a quant and its source.
+- `ggufkit viz error` and `viz layers`: quantization-error heatmaps and a per-layer map of
+  which tensor got which quantization type.
+- in-toto statements for signing with `cosign` or `model_signing`.
 
-These scripts are experimental and likely not very well tested. They may or may not work. Use at your own risk.
+## Development
+
+```sh
+uv sync --all-extras
+uv run pytest
+uv run ruff check . && uv run ruff format --check .
+uv run mypy
+```
+
+Tests build tiny GGUF files in-process; nothing is downloaded. `pytest --update-golden`
+rewrites the golden fingerprint after a deliberate spec change (bump the spec id too).
+
+## Origins
+
+ggufkit started from [KerfuffleV2/gguf-tools](https://github.com/KerfuffleV2/gguf-tools)
+(MIT, 2023): `gguf-checksum`, `gguf-frankenstein` and `gguf-tensor-to-image`. Those commits
+are preserved in this repository's history. The checksum tool's idea, hashing metadata,
+tensor descriptors and weights separately and independent of their order, is the seed of
+the fingerprint specification.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
