@@ -7,7 +7,8 @@ Fingerprint, verify and visualize [GGUF](https://github.com/ggml-org/ggml/blob/m
 - Is this GGUF the same model as that one, even though the bytes differ?
 - Did a re-upload change the weights, or only the metadata? Which keys, which tensors?
 - Does this file document where it came from well enough to reproduce it?
-- How far is this quantization from its source, tensor by tensor?
+- How far is this quantization from its source, tensor by tensor, and where inside each tensor?
+- Which quantization type did each tensor get?
 - What does `blk.17.attn_q.weight` actually look like?
 
 It is built on llama.cpp's own [`gguf`](https://pypi.org/project/gguf/) Python package, so
@@ -125,6 +126,47 @@ removed or changed (shape, type, data). `--numeric` decodes both sides and repor
 tensor, worst first, in bounded memory. `--tensor 'blk.*.attn_*'` narrows it, `--json` gives
 machine-readable output, and the exit status is 1 when anything differs.
 
+### See where quantization loses precision
+
+```sh
+ggufkit viz error model-BF16.gguf model-Q4_K_M.gguf blk.0.attn_q.weight -o err.png
+ggufkit viz error model-BF16.gguf model-Q4_K_M.gguf 'blk.*.attn_q.weight' --match-glob --shared-scale -o imgs/err.png
+```
+
+![Per-weight Q4_0 error of a synthetic tensor with one outlier input channel](assets/example-error.png)
+
+*Synthetic example from `scripts/make_examples.py`: a 256x512 tensor whose input channel 100 has
+8x larger weights, quantized to Q4_0. Q4_0 stores one scale per block of 32 weights, so the
+outlier stretches the scale of its whole block and every weight in that band loses precision.*
+
+Each pixel is the error of one weight: absolute by default, `--metric rel` or `--metric signed`
+on request. Large tensors are pooled down to `--max-pixels` while they are decoded, and the
+default `--pool max` keeps the worst weight of each pixel visible. The caption gives rmse,
+relative L2 and cosine similarity; `--shared-scale` puts several tensors on one colour scale.
+
+### See the quant mix
+
+```console
+$ ggufkit viz layers synthetic-Q4_K_M.gguf
+block  attn_norm  attn_q  attn_k  attn_v  attn_output  ffn_norm  ffn_gate  ffn_up  ffn_down
+0      F32        Q4_K    Q4_K    Q6_K    Q4_K         F32       Q4_K      Q4_K    Q6_K
+1      F32        Q4_K    Q4_K    Q4_K    Q4_K         F32       Q4_K      Q4_K    Q6_K
+…
+Q4_K   4.500 bpw     79 tensors   70.9% of bytes
+Q6_K   6.562 bpw      6 tensors    9.2% of bytes
+F32   32.000 bpw     25 tensors   19.9% of bytes
+$ ggufkit viz layers synthetic-Q4_K_M.gguf -o layers.png
+```
+
+![Quantization type per tensor and block for a synthetic Q4_K_M-style file](assets/example-layers.png)
+
+*Synthetic example from `scripts/make_examples.py`, loosely modelled on llama.cpp's Q4_K_M
+recipe, which keeps some `attn_v` and `ffn_down` tensors at Q6_K.*
+
+One row per block, one column per tensor role, coloured by bits per weight, with non-block
+tensors and a legend underneath. Mixed and "dynamic" quantizations show their recipe at a
+glance. The text table and `--json` work without Pillow.
+
 ### Stitch metadata onto tensors
 
 ```sh
@@ -159,8 +201,7 @@ file, and `ggufkit diff --numeric` tells you how far apart the two are when you 
 
 ## Roadmap
 
-- `ggufkit viz error` and `viz layers`: quantization-error heatmaps and a per-layer map of
-  which tensor got which quantization type.
+- A gallery of error maps and quant maps for popular open models, built from the real files.
 - in-toto statements from manifests, for signing with `cosign` or `model_signing`.
 - A one-shot "reproduce this quant" check that drives `llama-quantize` from a manifest.
 

@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.2.0] - unreleased
+
+### Added
+
+- `ggufkit viz error`: per-weight error heatmaps between two models' tensors (absolute,
+  relative or signed), pooled to a pixel budget while decoding, with a caption of rmse,
+  relative L2 and cosine similarity, and an optional shared colour scale.
+- `ggufkit viz layers`: a grid of the quantization type of every tensor, block by block,
+  coloured by bits per weight; also as a text table or JSON.
+- `scripts/make_examples.py`, which regenerates the synthetic example images in the README.
+
 ## [0.1.0] - unreleased
 
 First release.

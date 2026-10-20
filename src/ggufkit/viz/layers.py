@@ -138,10 +138,10 @@ def format_text(lm: LayerMap) -> list[str]:
     col_w = {r: max(len(r), width) for r in lm.roles}
     lines: list[str] = []
     if lm.roles:
-        lines.append("block  " + "  ".join(r.ljust(col_w[r]) for r in lm.roles))
+        lines.append(("block  " + "  ".join(r.ljust(col_w[r]) for r in lm.roles)).rstrip())
         for b in lm.blocks:
             cells = "  ".join((lm.cells.get((b, r)) or "-").ljust(col_w[r]) for r in lm.roles)
-            lines.append(f"{b:<5}  {cells}")
+            lines.append(f"{b:<5}  {cells}".rstrip())
     if lm.global_roles:
         lines.append("")
         lines.append(
