@@ -7,8 +7,11 @@ import sys
 from typing import TYPE_CHECKING
 
 from ggufkit import __version__
+from ggufkit import diff as diff_cmd
 from ggufkit import fingerprint as fingerprint_cmd
+from ggufkit import manifest as manifest_cmd
 from ggufkit import stitch as stitch_cmd
+from ggufkit import verify as verify_cmd
 from ggufkit import viz as viz_cmd
 from ggufkit.canon import UnsupportedModelError
 from ggufkit.model import ModelError
@@ -29,6 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"ggufkit {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="<command>")
     fingerprint_cmd.add_parser(sub)
+    manifest_cmd.add_parser(sub)
+    verify_cmd.add_parser(sub)
+    diff_cmd.add_parser(sub)
     stitch_cmd.add_parser(sub)
     viz_cmd.add_parser(sub)
     return parser

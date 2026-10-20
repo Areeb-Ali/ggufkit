@@ -163,3 +163,24 @@ def fingerprint_of(path: Path, **kwargs: Any) -> Fingerprint:
 @pytest.fixture
 def tiny_gguf(tmp_path: Path) -> Path:
     return write_gguf(tmp_path / "tiny.gguf", kv=tiny_kv(), tensors=tiny_tensors())[0]
+
+
+def provenance_kv() -> dict[str, Any]:
+    """Metadata a well-documented quantization carries, for provenance tests."""
+    return {
+        "general.uuid": "123e4567-e89b-12d3-a456-426614174000",
+        "general.quantized_by": "tester",
+        "general.license": "apache-2.0",
+        "general.license.link": "https://example.org/license",
+        "general.source.url": "https://example.org/source",
+        "general.source.repo_url": "https://huggingface.co/org/model",
+        "general.base_model.count": 1,
+        "general.base_model.0.name": "Base Model",
+        "general.base_model.0.repo_url": "https://huggingface.co/org/base",
+        "general.dataset.count": 1,
+        "general.dataset.0.name": "calib",
+        "general.tags": ["chat", "test"],
+        "imatrix.datasets": ["calibration.txt"],
+        "imatrix.chunk_count": 128,
+        "imatrix.chunk_size": 512,
+    }
