@@ -1,0 +1,59 @@
+{
+  "kv": "aa3dfc4e0b8b3de2b1677fed9c13dc50c9c68484e8fda831a7f1cb8de62ab3b6",
+  "kvs": {
+    "general.architecture": "b2b6af2f7c3ecf2bb7f09214184d429e0041e6f7bdbeb8fadea1c45ce5d69b5c",
+    "general.count": "a5adaf1dbe024e1a26d04732192f3812f233c6f83fd3095aa0338dccb7791998",
+    "general.file_type": "a081469dd49dfaa7c3bff63a32c62a9c8e4a0c5c41b7ae7fdf39ea0c8c594d46",
+    "general.flag": "4f4a24122731d8558e45a900c156e03cc25fd7f1c9c780d87454849caec39242",
+    "general.name": "9ad8aec54ff67b4ff3a4383aa8ea5512bffd01e0a2c83d93c6a7fd48da970511",
+    "general.ratio": "f68cc65780b79054047ab86f4abec042472b76a5551b81d2f56870f51e0e15ba",
+    "general.ratio64": "9f919a988bc3099bb0171c36a37a641f0a83fd65630b7f0e10a7d9f44e4da7c9",
+    "general.small": "f53c51d9e343857f5cd81007019329cbdedaac72a4483e51b0dd4672f4621bd5",
+    "tokenizer.ggml.scores": "caca6de873250bcc444b4e435d1b8ea3fad0bde32d796fa328170f88373d3503",
+    "tokenizer.ggml.token_type": "5bb6fa4205d1a4f7bf18199a55041d4b1659106324b7bf9469ca8e402ece884b",
+    "tokenizer.ggml.tokens": "8b0cd2b371c6fe26676d4a2d7915ea98ebfcc4e31e41a7dd176fbdeb1c732a47"
+  },
+  "n_kv": 11,
+  "n_tensors": 5,
+  "overall": null,
+  "spec": "ggufkit-fp/1",
+  "tensor_info": "bed803470d53debbd74c171732e09b5719cc6fca56feb9ba702fa66020e2f1be",
+  "tensors": {
+    "blk.0.ffn_down.weight": {
+      "data": "312e9b6759aa845b25634dbabb991dd2d3bd45c31194d9003b3a48952c9af818",
+      "info": "7f9af97a2bdc364c9b9899536e496ccfabbce92e139675e3c219228b9a045dc6",
+      "shape": [
+        256,
+        2
+      ],
+      "type": "Q4_K"
+    },
+    "blk.0.ffn_up.weight": {
+      "data": "b0e1693add4d14618ae28398033119d09923104807e754c05689c1b1a4fd5624",
+      "info": "896e79a4302b4754f5416189b21aa04cddc1d3346086f5c2ff5d8cb260aaf365",
+      "shape": [
+        256,
+        2
+      ],
+      "type": "IQ2_XXS"
+    },
+    "output_norm.weight": {
+      "data": "bec892b4e5c77903c2ed7b4808a781badd5969498ad4340f22e3f0bded7a4c6e",
+      "info": "f9e2cd08221873c00e31bba702dfbaad420a49454a688d686c94c813cfead662",
+      "shape": [
+        32
+      ],
+      "type": "F32"
+    },
+    "token_embd.weight": {
+      "data": "2dc303bc7edef6deb0208a074ee56a3024e6d635f5b87854fdc9c916fbeff779",
+      "info": "ea776c35e188f80bdd463c2bdca3785c62314982f88c5221eec21a52c3f36a44",
+      "shape": [
+        32,
+        4
+      ],
+      "type": "F16"
+    }
+  },
+  "weights": null
+}
