@@ -122,3 +122,70 @@ def test_text_works_without_pillow(
     monkeypatch.setattr(builtins, "__import__", no_pil)
     assert main(["viz", "layers", str(mixed), "--text"]) == 0
     assert "attn_q" in capsys.readouterr().out
+
+
+@pytest.fixture
+def other_mix(tmp_path: Path) -> Path:
+    tensors = {"token_embd.weight": (det_floats((8, 64)), Q.Q8_0)}
+    for b in range(3):
+        tensors[f"blk.{b}.attn_norm.weight"] = (det_floats((64,)), Q.F32)
+        tensors[f"blk.{b}.attn_q.weight"] = (det_floats((64, 256)), Q.IQ4_XS)
+    return write_gguf(tmp_path / "other.gguf", kv=tiny_kv(), tensors=tensors)[0]
+
+
+def test_shared_colours_are_consistent(mixed: Path, other_mix: Path) -> None:
+    from ggufkit.viz.layers import shared_colours
+
+    with open_model(mixed) as a, open_model(other_mix) as b:
+        la, lb = build_layer_map(a), build_layer_map(b)
+    shared = shared_colours([la, lb])
+    assert list(shared) == ["IQ4_XS", "Q4_0", "Q4_K", "Q6_K", "Q8_0", "F16", "F32"]
+    assert len(set(shared.values())) == len(shared)
+    alone = shared_colours([la])
+    assert "IQ4_XS" not in alone
+    assert alone["Q4_0"] != shared["Q4_0"]  # the union shifts the palette, which is the point
+
+
+def test_comparison_image(mixed: Path, other_mix: Path) -> None:
+    pytest.importorskip("PIL")
+    from ggufkit.viz.layers import make_comparison
+
+    with open_model(mixed) as a, open_model(other_mix) as b:
+        la, lb = build_layer_map(a), build_layer_map(b)
+    single = make_image(la, title="mixed")
+    both = make_comparison([la, lb], ["mixed", "other"])
+    assert both.width > single.width
+    with pytest.raises(ValueError, match="shorter"):
+        make_comparison([la, lb], ["only one title"])
+
+
+def test_cli_with_two_models(
+    mixed: Path, other_mix: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["viz", "layers", str(mixed), str(other_mix)]) == 0
+    out = capsys.readouterr().out
+    assert "== mixed.gguf" in out
+    assert "== other.gguf" in out
+    assert main(["viz", "layers", str(mixed), str(other_mix), "--json"]) == 0
+    assert [m["model"] for m in json.loads(capsys.readouterr().out)] == ["mixed.gguf", "other.gguf"]
+    assert main(["viz", "layers", str(mixed), str(other_mix), "--title", "only one"]) == 2
+    pytest.importorskip("PIL")
+    out_png = tmp_path / "compare.png"
+    assert (
+        main(
+            [
+                "viz",
+                "layers",
+                str(mixed),
+                str(other_mix),
+                "-o",
+                str(out_png),
+                "--title",
+                "A",
+                "--title",
+                "B",
+            ]
+        )
+        == 0
+    )
+    assert out_png.is_file()

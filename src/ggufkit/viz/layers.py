@@ -23,6 +23,7 @@ from ggufkit.viz import palette
 
 if TYPE_CHECKING:
     import argparse
+    from collections.abc import Callable, Sequence
 
     from gguf import GGMLQuantizationType
     from PIL import Image
@@ -157,57 +158,72 @@ def format_text(lm: LayerMap) -> list[str]:
     return lines
 
 
-def make_image(
-    lm: LayerMap,
-    *,
-    cell_w: int = 18,
-    cell_h: int = 12,
-    title: str | None = None,
-) -> Image.Image:
-    """Draw the block grid, then the non-block tensors and a legend underneath."""
+Colour = tuple[int, int, int]
+
+
+def shared_colours(maps: Sequence[LayerMap]) -> dict[str, Colour]:
+    """One colour per type across all ``maps``, ordered by bits per weight.
+
+    Using the union of types keeps the same type the same colour in every panel of a
+    comparison.
+    """
+    bpw: dict[str, float] = {}
+    for lm in maps:
+        bpw.update(lm.types)
+    order = sorted(bpw, key=lambda t: (bpw[t], t))
+    return dict(zip(order, palette.categorical(len(order)), strict=True))
+
+
+def _font_and_width() -> tuple[Any, Callable[[str], int]]:
     from PIL import Image, ImageDraw, ImageFont
 
     font = ImageFont.load_default()
-    order = lm.type_order()
-    colours = dict(zip(order, palette.categorical(len(order)), strict=True))
     probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    return font, lambda s: int(probe.textlength(s, font=font))
 
-    def text_w(s: str) -> int:
-        return int(probe.textlength(s, font=font))
 
-    pad, line_h, swatch = 8, 14, 14
+_PAD, _LINE_H, _SWATCH = 8, 14, 14
+_INK, _FAINT, _EMPTY = (20, 20, 20), (110, 110, 110), (225, 225, 225)
+
+
+def _panel(
+    lm: LayerMap,
+    colours: dict[str, Colour],
+    *,
+    cell_w: int,
+    cell_h: int,
+    title: str | None,
+) -> Image.Image:
+    """Draw the block grid with its title and the non-block tensors, without a legend."""
+    from PIL import Image, ImageDraw
+
+    font, text_w = _font_and_width()
+    pad, line_h, swatch = _PAD, _LINE_H, _SWATCH
     row_labels = [f"blk.{b}" for b in lm.blocks]
     label_w = max([text_w(s) for s in row_labels] + [10]) + pad
     header_h = (max([text_w(r) for r in lm.roles] + [0]) + pad) if lm.roles else 0
     grid_w = len(lm.roles) * cell_w
     grid_h = len(row_labels) * cell_h
     global_lines = [f"{r}  {lm.cells[(None, r)]}" for r in lm.global_roles]
-    legend_lines = [f"{t}  {lm.types[t]:.2f} bpw  ({lm.counts[t]} tensors)" for t in order]
-    text_block = [*global_lines, *legend_lines]
     title_h = line_h + 2 if title else 0
-    sections_h = (
-        (line_h + len(global_lines) * line_h + pad if global_lines else 0)
-        + line_h
-        + len(legend_lines) * line_h
-    )
+    globals_h = line_h + len(global_lines) * line_h if global_lines else 0
     width = max(
         pad + label_w + grid_w + pad,
-        pad + swatch + 6 + max([text_w(s) for s in text_block] + [text_w(title or "")]) + pad,
+        pad + swatch + 6 + max([text_w(s) for s in global_lines] + [text_w(title or "")]) + pad,
     )
-    height = pad + title_h + header_h + grid_h + pad + sections_h + pad
+    height = pad + title_h + header_h + grid_h + pad + globals_h + pad
     img = Image.new("RGB", (width, height), (255, 255, 255))
     draw = ImageDraw.Draw(img)
-    ink, faint = (20, 20, 20), (110, 110, 110)
 
     y = pad
     if title:
-        draw.text((pad, y), title, fill=ink, font=font)
+        draw.text((pad, y), title, fill=_INK, font=font)
         y += title_h
     gx, gy = pad + label_w, y + header_h
 
     for j, role in enumerate(lm.roles):
         tile = Image.new("RGB", (text_w(role) + 2, 12), (255, 255, 255))
-        ImageDraw.Draw(tile).text((0, 0), role, fill=ink, font=font)
+        ImageDraw.Draw(tile).text((0, 0), role, fill=_INK, font=font)
         rotated = tile.rotate(90, expand=True)
         img.paste(
             rotated, (gx + j * cell_w + (cell_w - rotated.width) // 2, gy - rotated.height - 2)
@@ -215,32 +231,100 @@ def make_image(
 
     for i, b in enumerate(lm.blocks):
         cy = gy + i * cell_h
-        draw.text((pad, cy), row_labels[i], fill=ink, font=font)
+        draw.text((pad, cy), row_labels[i], fill=_INK, font=font)
         for j, role in enumerate(lm.roles):
             cx = gx + j * cell_w
             tname = lm.cells.get((b, role))
             box = (cx, cy, cx + cell_w - 2, cy + cell_h - 2)
             if tname is None:
-                draw.rectangle(box, outline=(225, 225, 225))
+                draw.rectangle(box, outline=_EMPTY)
             else:
                 draw.rectangle(box, fill=colours[tname])
 
     y = gy + grid_h + pad
     if global_lines:
-        draw.text((pad, y), "non-block tensors", fill=faint, font=font)
+        draw.text((pad, y), "non-block tensors", fill=_FAINT, font=font)
         y += line_h
         for role, line in zip(lm.global_roles, global_lines, strict=True):
             draw.rectangle((pad, y + 1, pad + swatch, y + 11), fill=colours[lm.cells[(None, role)]])
-            draw.text((pad + swatch + 6, y), line, fill=ink, font=font)
+            draw.text((pad + swatch + 6, y), line, fill=_INK, font=font)
             y += line_h
-        y += pad
-    draw.text((pad, y), "types, fewest bits first", fill=faint, font=font)
-    y += line_h
-    for t, line in zip(order, legend_lines, strict=True):
+    return img
+
+
+def _legend(maps: Sequence[LayerMap], colours: dict[str, Colour]) -> Image.Image:
+    """Types in bits order with bits per weight and tensor counts (one count per map)."""
+    from PIL import Image, ImageDraw
+
+    font, text_w = _font_and_width()
+    bpw: dict[str, float] = {}
+    for lm in maps:
+        bpw.update(lm.types)
+    order = sorted(bpw, key=lambda t: (bpw[t], t))
+    width_t = max(len(t) for t in order) if order else 0
+    lines = []
+    for t in order:
+        counts = " | ".join(str(lm.counts.get(t, 0)) for lm in maps)
+        lines.append(f"{t:<{width_t}}  {bpw[t]:5.2f} bpw  ({counts} tensors)")
+    heading = "types, fewest bits first"
+    pad, line_h, swatch = _PAD, _LINE_H, _SWATCH
+    width = pad + swatch + 6 + max([text_w(s) for s in [*lines, heading]]) + pad
+    height = line_h + len(lines) * line_h + pad
+    img = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.text((pad, 0), heading, fill=_FAINT, font=font)
+    y = line_h
+    for t, line in zip(order, lines, strict=True):
         draw.rectangle((pad, y + 1, pad + swatch, y + 11), fill=colours[t])
-        draw.text((pad + swatch + 6, y), line, fill=ink, font=font)
+        draw.text((pad + swatch + 6, y), line, fill=_INK, font=font)
         y += line_h
     return img
+
+
+def _stack(top: Sequence[Image.Image], bottom: Image.Image) -> Image.Image:
+    from PIL import Image
+
+    width = max(sum(i.width for i in top), bottom.width)
+    height = max(i.height for i in top) + bottom.height
+    out = Image.new("RGB", (width, height), (255, 255, 255))
+    x = 0
+    for panel in top:
+        out.paste(panel, (x, 0))
+        x += panel.width
+    out.paste(bottom, (0, height - bottom.height))
+    return out
+
+
+def make_image(
+    lm: LayerMap,
+    *,
+    cell_w: int = 18,
+    cell_h: int = 12,
+    title: str | None = None,
+) -> Image.Image:
+    """Draw one model's block grid, its non-block tensors and a legend underneath."""
+    colours = shared_colours([lm])
+    panel = _panel(lm, colours, cell_w=cell_w, cell_h=cell_h, title=title)
+    return _stack([panel], _legend([lm], colours))
+
+
+def make_comparison(
+    maps: Sequence[LayerMap],
+    titles: Sequence[str],
+    *,
+    cell_w: int = 18,
+    cell_h: int = 12,
+) -> Image.Image:
+    """Draw several models side by side with one palette and one legend.
+
+    Legend counts are given per panel, left to right.
+    """
+    colours = shared_colours(maps)
+    panels = [
+        _panel(lm, colours, cell_w=cell_w, cell_h=cell_h, title=t)
+        for lm, t in zip(maps, titles, strict=True)
+    ]
+    return _stack(panels, _legend(maps, colours))
 
 
 def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -250,17 +334,24 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         description=(
             "Show the quantization mixture of a GGUF model as a grid: one row per block, one "
             "column per tensor role, coloured by bits per weight. Prints a text table by "
-            "default; -o writes a PNG (needs Pillow); --json prints the grid as JSON."
+            "default; -o writes a PNG (needs Pillow); --json prints the grid as JSON. With "
+            "several models, -o draws them side by side with one shared palette."
         ),
     )
-    p.add_argument("model", type=Path, help="GGUF file, or any shard of a split model")
+    p.add_argument(
+        "model", type=Path, nargs="+", help="GGUF file(s), or any shard of a split model"
+    )
     p.add_argument("-o", "--output", type=Path, help="PNG to write")
     p.add_argument("--text", action="store_true", help="print the text table even with -o")
     p.add_argument("--json", action="store_true", help="print the grid as JSON")
     p.add_argument(
         "--cell", default="18x12", metavar="WxH", help="cell size in pixels (default: 18x12)"
     )
-    p.add_argument("--title", help="title drawn above the grid (default: the file name)")
+    p.add_argument(
+        "--title",
+        action="append",
+        help="panel title, once per model in order (default: the file names)",
+    )
     p.add_argument("--force", action="store_true", help="overwrite an existing image")
     p.set_defaults(func=run)
 
@@ -271,24 +362,45 @@ def run(args: argparse.Namespace) -> int:
     except ValueError:
         print("error: --cell expects WxH, for example 18x12", file=sys.stderr)
         return 2
+    if args.title and len(args.title) != len(args.model):
+        print("error: give one --title per model, or none", file=sys.stderr)
+        return 2
     if args.output is not None and args.output.exists() and not args.force:
         msg = f"{args.output} already exists (use --force to overwrite)"
         raise FileExistsError(msg)
-    with open_model(args.model) as model:
-        lm = build_layer_map(model)
-        name = model.path.name
+    maps: list[LayerMap] = []
+    names: list[str] = []
+    for path in args.model:
+        with open_model(path) as model:
+            maps.append(build_layer_map(model))
+            names.append(model.path.name)
+    titles = list(args.title) if args.title else [n.removesuffix(".gguf") for n in names]
+
     if args.json:
-        json.dump(lm.to_dict(), sys.stdout, indent=2)
+        if len(maps) == 1:
+            json.dump(maps[0].to_dict(), sys.stdout, indent=2)
+        else:
+            json.dump(
+                [{"model": n, **lm.to_dict()} for n, lm in zip(names, maps, strict=True)],
+                sys.stdout,
+                indent=2,
+            )
         sys.stdout.write("\n")
     elif args.output is None or args.text:
-        print("\n".join(format_text(lm)))
+        for i, (name, lm) in enumerate(zip(names, maps, strict=True)):
+            if len(maps) > 1:
+                print(("" if i == 0 else "\n") + f"== {name}")
+            print("\n".join(format_text(lm)))
     if args.output is not None:
         try:
             import PIL  # noqa: F401
         except ImportError:
             print("error: rendering needs Pillow: pip install 'ggufkit[viz]'", file=sys.stderr)
             return 2
-        img = make_image(lm, cell_w=cell_w, cell_h=cell_h, title=args.title or name)
+        if len(maps) == 1:
+            img = make_image(maps[0], cell_w=cell_w, cell_h=cell_h, title=titles[0])
+        else:
+            img = make_comparison(maps, titles, cell_w=cell_w, cell_h=cell_h)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         img.save(args.output)
         if not args.json:
