@@ -25,6 +25,17 @@ ggufkit manifest model-Q4_K_M.gguf \
 This writes `model-Q4_K_M.manifest.json` next to the model. Publish it with the model; anyone
 can then run `ggufkit verify model-Q4_K_M.gguf --manifest model-Q4_K_M.manifest.json`.
 
+Other options:
+
+- `-o FILE` writes the manifest elsewhere; `-o -` prints it instead of writing a file.
+- `--note TEXT` stores a free-text note, for example where the source came from.
+- `--no-per-tensor` leaves out the per-tensor digests, which makes the manifest much smaller.
+  `verify` can then still tell that the weights changed, but not which tensor.
+- `--no-data` leaves out the weight digests entirely (instant on any size). `verify` against
+  such a manifest cannot compare weights, and fails unless it is run with `--no-data` too.
+- `--force` overwrites an existing manifest. Output is written to a temporary file and moved
+  into place, so an interrupted run never leaves a half-written manifest.
+
 ## Fields
 
 | field | content |
@@ -119,7 +130,7 @@ the model file, signs it, and checks it later:
 
 ```sh
 # producer
-cosign attest-blob --key cosign.key \
+COSIGN_MAX_ATTACHMENT_SIZE=64GiB cosign attest-blob --key cosign.key \
   --predicate model.manifest.json \
   --type https://github.com/MysterionRise/ggufkit/manifest/v1 \
   --bundle model.sigstore.json model.gguf

@@ -6,7 +6,7 @@
 //   vertical  1080x1920, 30 fps -> build/demos/NAME.mp4 and NAME-cover.png
 //   feed      1080x1350, 30 fps -> build/demos/NAME-feed.mp4 and NAME-feed-cover.png (4:5)
 //   readme     800x1000, 15 fps -> assets/demos/NAME.gif and assets/demos/NAME.png
-// Every MP4 also gets build/demos/NAME.srt with the on-screen text as captions.
+// Every MP4 also gets an .srt with its on-screen text as captions (NAME.srt, NAME-feed.srt).
 // Needs Playwright (with a Chromium it can launch) and ffmpeg on PATH.
 
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -91,7 +91,7 @@ try {
       if (f.out === "mp4") {
         const out = join(ROOT, "build", "demos");
         await page.screenshot({ path: join(out, `${name}${f.suffix}-cover.png`) });
-        const captions = join(out, `${name}.srt`);
+        const captions = join(out, `${name}${f.suffix}.srt`);
         writeFileSync(captions, srt(await page.evaluate(() => window.captions())));
         const mp4 = join(out, `${name}${f.suffix}.mp4`);
         ffmpeg(

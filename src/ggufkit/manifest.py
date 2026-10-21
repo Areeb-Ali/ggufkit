@@ -14,7 +14,7 @@ import json
 import platform
 import sys
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from hashlib import sha256
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -319,7 +319,7 @@ def build_manifest(
         gguf_py = "unknown"
     return {
         "schema": SCHEMA,
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "tool": {
             "name": "ggufkit",
             "version": __version__,

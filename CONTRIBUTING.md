@@ -10,7 +10,7 @@ cd ggufkit
 uv sync --all-extras
 ```
 
-[uv](https://docs.astral.sh/uv/) manages the virtual environment and the lockfile. Python 3.10
+[uv](https://docs.astral.sh/uv/) manages the virtual environment and the lockfile. Python 3.11
 or newer.
 
 ## Before you open a pull request
@@ -21,10 +21,13 @@ Run what CI runs:
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy
-uv run pytest
+uv run pytest --cov
 ```
 
-CI repeats these on Ubuntu and Windows for Python 3.10 to 3.13 and builds the wheel.
+CI runs all of these as blocking checks: lint, format and mypy once, the tests on Ubuntu and
+Windows for Python 3.11 to 3.14 and on macOS for one Python, with at least 90% coverage. It
+also builds the wheel and sdist and runs `scripts/smoke_test.py` against a clean install of
+each.
 
 ## Tests
 
@@ -67,8 +70,9 @@ uv run python scripts/make_demos.py
 ```
 
 The scenes are in `scripts/demos/scenes.html`; captions there must stay true of the recorded
-output. To re-render without re-running the commands, call the renderer on the recorded data;
-`--formats=feed` adds a 4:5 (1080x1350) MP4, and every MP4 gets an `.srt` of its on-screen text:
+output. To re-render without re-running the commands, call the renderer on the recorded data.
+`--formats` picks the formats to render instead of the default two (`vertical,readme`):
+`feed` is a 4:5 (1080x1350) MP4, and every MP4 gets an `.srt` of its on-screen text.
 
 ```sh
 node scripts/demos/render.mjs scratch/demos/demos.json tamper --formats=feed

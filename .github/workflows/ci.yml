@@ -2,69 +2,84 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Its own group name, so a release that calls this workflow cannot cancel itself.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  lint:
+    name: lint, format, types
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --all-extras --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+
   test:
     name: test (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ["3.10", "3.11", "3.12", "3.13"]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: macos-latest
+            python: "3.13"
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
-      - name: Install
-        run: uv sync --all-extras --locked
-      - name: Lint
-        run: uv run ruff check .
-      - name: Format
-        run: uv run ruff format --check .
-      - name: Test
-        run: uv run pytest -q
-
-  typecheck:
-    name: mypy (advisory)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with:
-          python-version: "3.12"
-          enable-cache: true
       - run: uv sync --all-extras --locked
-      - run: uv run mypy
+      - run: uv run pytest -q --cov --cov-report=term-missing:skip-covered --cov-fail-under=90
 
   build:
-    name: build sdist and wheel
+    name: build and smoke-test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - run: uv build
-      - name: Smoke-test the wheel
+      - name: Check the distributions
+        run: uvx twine check --strict dist/*
+      - name: Install each distribution in a clean environment and use it
         run: |
-          uv venv /tmp/smoke
-          uv pip install --python /tmp/smoke/bin/python dist/*.whl
-          /tmp/smoke/bin/ggufkit --version
-          /tmp/smoke/bin/ggufkit fingerprint --help > /dev/null
+          for dist in dist/*.whl dist/*.tar.gz; do
+            rm -rf /tmp/smoke
+            uv venv --quiet /tmp/smoke
+            uv pip install --quiet --python /tmp/smoke/bin/python "$dist" pillow
+            /tmp/smoke/bin/python scripts/smoke_test.py
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
