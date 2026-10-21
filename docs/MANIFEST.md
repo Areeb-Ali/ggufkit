@@ -76,3 +76,53 @@ Exit status: `0` for `identical` (and for `metadata-only` with `--allow-metadata
 other verdict or a raw file hash mismatch, `2` for errors. `--ignore-keys 'general.name,tokenizer.chat_template'`
 excludes keys you expect to change. A manifest made with `--no-data` carries no weights digest,
 so verification against it says `weights: not compared`.
+
+## Signing
+
+A manifest is a set of claims; signing it binds those claims to the exact files and to whoever
+signed. ggufkit does no cryptography itself. It hands the manifest to standard supply-chain
+tools in the shape they expect.
+
+`--intoto FILE` writes an [in-toto Statement v1](https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md)
+next to the manifest: one `subject` per file, identified by its raw sha256, `predicateType`
+`https://github.com/MysterionRise/ggufkit/manifest/v1`, and the manifest as `predicate`. It
+implies `--file-sha256`.
+
+```sh
+ggufkit manifest model.gguf --intoto model.intoto.json
+```
+
+### With cosign
+
+[cosign](https://github.com/sigstore/cosign) builds the statement itself from the manifest and
+the model file, signs it, and checks it later:
+
+```sh
+# producer
+cosign attest-blob --key cosign.key \
+  --predicate model.manifest.json \
+  --type https://github.com/MysterionRise/ggufkit/manifest/v1 \
+  --bundle model.sigstore.json model.gguf
+
+# consumer
+COSIGN_MAX_ATTACHMENT_SIZE=64GiB cosign verify-blob-attestation --key cosign.pub \
+  --bundle model.sigstore.json \
+  --type https://github.com/MysterionRise/ggufkit/manifest/v1 model.gguf
+```
+
+`COSIGN_MAX_ATTACHMENT_SIZE` matters: cosign refuses blobs over 128 MiB by default, and almost
+every GGUF is larger. By default `attest-blob` also records the signature in Sigstore's public
+transparency log; `--tlog-upload=false` keeps it local, and the matching check then needs
+`--insecure-ignore-tlog=true`. Keyless signing (`cosign attest-blob` without `--key`, using an
+OIDC identity) works the same way and is what most publishers will want.
+
+Tested with cosign 2.4.1, a throwaway key pair and the transparency log disabled, on
+unsloth's Qwen3-0.6B Q4_K_M file: the original verifies; a copy whose only change is
+`general.name` (made with llama.cpp's `gguf-new-metadata`) fails with
+`no matching subject digest found`, because cosign checks raw bytes. `ggufkit verify` on the
+same copy against the same manifest reports `metadata-only`, naming `general.name`. The two
+checks answer different questions; use both.
+
+For a model split into shards, `attest-blob` signs one file at a time: attest each shard with
+the same manifest as predicate, or sign the statement from `--intoto`, which lists every shard,
+with an in-toto or DSSE signer. The second route is not tested here.

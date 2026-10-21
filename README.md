@@ -102,6 +102,10 @@ with `--input KEY=VALUE`, and the list of what a reproducible quantization would
 this file does not. Its producer can close the `build_inputs.*` gaps with `--input`, for
 example `--input llama_cpp_commit=b8146`. Publish it next to the model.
 
+To sign it, `--intoto model.intoto.json` also writes an in-toto statement, and the manifest
+works as a predicate for `cosign attest-blob`. The tested recipe is in
+[docs/MANIFEST.md](docs/MANIFEST.md#signing).
+
 ### Verify
 
 A copy whose name was changed with llama.cpp's `gguf-new-metadata`, checked against the

@@ -35,6 +35,10 @@ if TYPE_CHECKING:
 
 SCHEMA = "ggufkit-manifest/1"
 
+#: in-toto Statement type and the predicate type a ggufkit manifest is published under.
+INTOTO_STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
+PREDICATE_TYPE = "https://github.com/MysterionRise/ggufkit/manifest/v1"
+
 #: Build inputs a reproducible quantization needs. They are not in the GGUF metadata, so the
 #: person who produced the file supplies them with ``--input``.
 BUILD_INPUT_KEYS = ("source_sha256", "imatrix_sha256", "llama_cpp_commit", "quantize_cmd")
@@ -366,6 +370,29 @@ def save_manifest(path: str | Path, manifest: Mapping[str, Any]) -> Path:
     return path
 
 
+class IntotoError(ManifestError):
+    """Raised when a manifest cannot become an in-toto statement."""
+
+
+def to_intoto_statement(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Wrap a manifest as an in-toto Statement v1 about the model's files.
+
+    Every shard becomes a subject identified by its raw sha256, so the statement can be signed
+    and later checked against the exact bytes downloaded. The manifest itself is the predicate.
+    """
+    files = manifest.get("files") or []
+    missing = [f.get("path") for f in files if not f.get("sha256")]
+    if not files or missing:
+        msg = "an in-toto statement needs raw file hashes; build the manifest with --file-sha256"
+        raise IntotoError(msg)
+    return {
+        "_type": INTOTO_STATEMENT_TYPE,
+        "subject": [{"name": f["path"], "digest": {"sha256": f["sha256"]}} for f in files],
+        "predicateType": PREDICATE_TYPE,
+        "predicate": dict(manifest),
+    }
+
+
 def default_manifest_path(model_path: str | Path) -> Path:
     p = Path(model_path)
     match = SHARD_RE.match(p.name)
@@ -433,6 +460,12 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     p.add_argument("--json", action="store_true", help="also print the manifest to stdout")
     p.add_argument("--file-sha256", action="store_true", help="also hash each file's raw bytes")
     p.add_argument(
+        "--intoto",
+        type=Path,
+        metavar="FILE",
+        help="also write an in-toto Statement v1 for signing (implies --file-sha256)",
+    )
+    p.add_argument(
         "--input",
         action="append",
         metavar="KEY=VALUE",
@@ -451,13 +484,14 @@ def run(args: argparse.Namespace) -> int:
     inputs = parse_build_inputs(args.input)
     to_stdout_only = args.output is not None and str(args.output) == "-"
     target = None if to_stdout_only else (args.output or default_manifest_path(args.model))
-    if target is not None and target.exists() and not args.force:
-        msg = f"{target} already exists (use --force to overwrite)"
-        raise FileExistsError(msg)
+    for path in (target, args.intoto):
+        if path is not None and path.exists() and not args.force:
+            msg = f"{path} already exists (use --force to overwrite)"
+            raise FileExistsError(msg)
     with open_model(args.model) as model:
         manifest = build_manifest(
             model,
-            file_sha256=args.file_sha256,
+            file_sha256=args.file_sha256 or args.intoto is not None,
             build_inputs=inputs,
             notes=args.note,
             data=not args.no_data,
@@ -466,11 +500,17 @@ def run(args: argparse.Namespace) -> int:
         )
     if target is not None:
         save_manifest(target, manifest)
+    if args.intoto is not None:
+        args.intoto.write_text(
+            json.dumps(to_intoto_statement(manifest), indent=2) + "\n", encoding="utf-8"
+        )
     if args.json or to_stdout_only:
         json.dump(manifest, sys.stdout, indent=2)
         sys.stdout.write("\n")
     elif not args.quiet:
         if target is not None:
             print(f"{'manifest':<12} {target}")
+        if args.intoto is not None:
+            print(f"{'in-toto':<12} {args.intoto}")
         print("\n".join(format_summary(manifest)))
     return 0

@@ -192,3 +192,57 @@ def test_manifest_cli_stdout_only(tiny_gguf: Path, capsys: pytest.CaptureFixture
     assert m["schema"] == SCHEMA
     assert m["fingerprint"]["weights"] is None
     assert not tiny_gguf.with_name("tiny.manifest.json").exists()
+
+
+def test_intoto_statement(tmp_path: Path) -> None:
+    from ggufkit.manifest import INTOTO_STATEMENT_TYPE, PREDICATE_TYPE, to_intoto_statement
+
+    shards = write_gguf(
+        tmp_path / "m.gguf", kv=tiny_kv(), tensors=tiny_tensors(), split_max_tensors=4
+    )
+    with open_model(shards[0]) as model:
+        manifest = build_manifest(model, file_sha256=True)
+    st = to_intoto_statement(manifest)
+    assert st["_type"] == INTOTO_STATEMENT_TYPE
+    assert st["predicateType"] == PREDICATE_TYPE
+    assert st["predicate"] == manifest
+    assert st["subject"] == [
+        {"name": p.name, "digest": {"sha256": hashlib.sha256(p.read_bytes()).hexdigest()}}
+        for p in shards
+    ]
+
+
+def test_intoto_needs_file_hashes(tiny_gguf: Path) -> None:
+    from ggufkit.manifest import IntotoError, to_intoto_statement
+
+    with open_model(tiny_gguf) as model:
+        manifest = build_manifest(model, data=False)
+    with pytest.raises(IntotoError, match="--file-sha256"):
+        to_intoto_statement(manifest)
+
+
+def test_manifest_cli_intoto_implies_file_hashes(
+    tiny_gguf: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    statement = tmp_path / "tiny.intoto.json"
+    manifest_path = tmp_path / "tiny.manifest.json"
+    rc = main(["manifest", str(tiny_gguf), "-o", str(manifest_path), "--intoto", str(statement)])
+    assert rc == 0
+    assert "in-toto" in capsys.readouterr().out
+    st = json.loads(statement.read_text())
+    digest = hashlib.sha256(tiny_gguf.read_bytes()).hexdigest()
+    assert st["subject"] == [{"name": "tiny.gguf", "digest": {"sha256": digest}}]
+    assert load_manifest(manifest_path)["files"][0]["sha256"] == digest
+    assert (
+        main(
+            [
+                "manifest",
+                str(tiny_gguf),
+                "-o",
+                str(tmp_path / "other.json"),
+                "--intoto",
+                str(statement),
+            ]
+        )
+        == 2
+    )
