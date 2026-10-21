@@ -1,5 +1,9 @@
 # ggufkit
 
+[![CI](https://github.com/MysterionRise/ggufkit/actions/workflows/ci.yml/badge.svg)](https://github.com/MysterionRise/ggufkit/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/MysterionRise/ggufkit/blob/main/LICENSE)
+![Python 3.10 to 3.13](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)
+
 Fingerprint, verify and visualize [GGUF](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md) models.
 
 `ggufkit` answers questions a plain file hash cannot:
@@ -15,7 +19,7 @@ It is built on llama.cpp's own [`gguf`](https://pypi.org/project/gguf/) Python p
 every tensor type that package can decode works here too: 26 of them, from `Q4_0` to
 `IQ2_XXS` and `MXFP4`. Sharded models (`-00001-of-00003.gguf`) are handled as one model.
 
-![Per-weight quantization error of blk.0.attn_k.weight in Qwen3-0.6B, Q4_K_M against BF16](assets/hero-error.png)
+![Per-weight quantization error of blk.0.attn_k.weight in Qwen3-0.6B, Q4_K_M against BF16](https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/hero-error.png)
 
 *Where 4-bit quantization loses precision: `ggufkit viz error` on `blk.0.attn_k.weight` of
 Qwen3-0.6B, comparing Unsloth's BF16 and Q4_K_M files. Error follows weight magnitude: bright
@@ -24,7 +28,7 @@ between error and weight magnitude: 0.99).*
 
 Every example below is real output on
 [unsloth/Qwen3-0.6B-GGUF](https://huggingface.co/unsloth/Qwen3-0.6B-GGUF) (Apache-2.0) at
-revision `50968a4`. [`scripts/make_readme_assets.py`](scripts/make_readme_assets.py) downloads
+revision `50968a4`. [`scripts/make_readme_assets.py`](https://github.com/MysterionRise/ggufkit/blob/main/scripts/make_readme_assets.py) downloads
 the three files, checks their sha256 and reruns every command.
 
 ## Why
@@ -33,14 +37,14 @@ Model signing ([OpenSSF model-signing](https://github.com/sigstore/model-transpa
 Sigstore) protects the bytes you were given. It breaks the moment someone fixes a chat
 template in the metadata, and when it breaks it cannot tell you whether the weights changed.
 It also says nothing about whether a community quantization was faithfully built from the
-model it names: a 2026 study of the most-downloaded GGUF repositories on Hugging Face found
-that none record enough build inputs to reproduce the quantization, and
+model it names. GGUF's standard metadata has no key for the source checksum, the llama.cpp
+version or the quantize command, so files do not say how to rebuild them, and
 [Mind the Gap](https://arxiv.org/abs/2505.23786) (ICML 2025) showed weights that behave
 well in full precision and badly after GGUF quantization.
 
 ggufkit gives GGUF files a content identity that survives the edits people legitimately make
-([docs/FINGERPRINT.md](docs/FINGERPRINT.md)), a provenance record that says what a file claims
-and what it leaves out ([docs/MANIFEST.md](docs/MANIFEST.md)), and the tools to check one
+([docs/FINGERPRINT.md](https://github.com/MysterionRise/ggufkit/blob/main/docs/FINGERPRINT.md)), a provenance record that says what a file claims
+and what it leaves out ([docs/MANIFEST.md](https://github.com/MysterionRise/ggufkit/blob/main/docs/MANIFEST.md)), and the tools to check one
 against the other.
 
 ## Install
@@ -101,6 +105,10 @@ The manifest is a JSON file: the full fingerprint, file sizes (and raw hashes wi
 with `--input KEY=VALUE`, and the list of what a reproducible quantization would record but
 this file does not. Its producer can close the `build_inputs.*` gaps with `--input`, for
 example `--input llama_cpp_commit=b8146`. Publish it next to the model.
+
+To sign it, `--intoto model.intoto.json` also writes an in-toto statement, and the manifest
+works as a predicate for `cosign attest-blob`. The tested recipe is in
+[docs/MANIFEST.md](https://github.com/MysterionRise/ggufkit/blob/main/docs/MANIFEST.md#signing).
 
 ### Verify
 
@@ -178,13 +186,13 @@ ggufkit viz error Qwen3-0.6B-BF16.gguf Qwen3-0.6B-Q4_K_M.gguf blk.0.attn_q.weigh
 ggufkit viz error Qwen3-0.6B-BF16.gguf Qwen3-0.6B-Q4_K_M.gguf 'blk.*.attn_q.weight' --match-glob --shared-scale -o imgs/err.png
 ```
 
-<img src="assets/error-attn_q.png" alt="Per-weight Q4_K error of blk.0.attn_q.weight in Qwen3-0.6B" width="341">
+<img src="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/error-attn_q.png" alt="Per-weight Q4_K error of blk.0.attn_q.weight in Qwen3-0.6B" width="341">
 
 *`blk.0.attn_q.weight`, Q4_K against BF16. Besides the bright rows, a brighter patch stands
 out a quarter of the way down, in the rows of attention heads 3 to 5: its weights are about 40%
 larger than the tensor's average, and its error about 60% larger.*
 
-![Per-weight Q4_0 error of a synthetic tensor with one outlier input channel](assets/example-error.png)
+![Per-weight Q4_0 error of a synthetic tensor with one outlier input channel](https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/example-error.png)
 
 *A synthetic illustration of the mechanism, from `scripts/make_examples.py`: one input channel
 with 8x larger weights, quantized to Q4_0. Q4_0 stores one scale per block of 32 weights along
@@ -208,7 +216,7 @@ block  attn_norm  attn_q  attn_k  attn_v  attn_q_norm  attn_k_norm  attn_output 
 $ ggufkit viz layers Qwen3-0.6B-Q4_K_M.gguf Qwen3-0.6B-UD-Q4_K_XL.gguf -o layers.png
 ```
 
-![Quantization type of every tensor in Qwen3-0.6B Q4_K_M and UD-Q4_K_XL, side by side](assets/layers-compare.png)
+![Quantization type of every tensor in Qwen3-0.6B Q4_K_M and UD-Q4_K_XL, side by side](https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/layers-compare.png)
 
 *The two 4-bit files from the verify example. llama.cpp's Q4_K_M recipe (left) raises `attn_v`
 and `ffn_down` to Q6_K in the first three blocks, every third block after that and the last
@@ -240,7 +248,7 @@ Each pixel is one weight: brightness follows magnitude, hue says whether the wei
 well below the mean, well above it, or in between. A slice of an `attn_q` tensor from a 3B
 model:
 
-![attn_q tensor rendered as an image](assets/attn_q_snippet.png)
+![attn_q tensor rendered as an image](https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/attn_q_snippet.png)
 
 PyTorch checkpoints work too when `torch` is installed (`--model-type torch`).
 
@@ -256,7 +264,6 @@ file, and `ggufkit diff --numeric` tells you how far apart the two are when you 
 ## Roadmap
 
 - A gallery of error maps and quant maps for popular open models, built from the real files.
-- in-toto statements from manifests, for signing with `cosign` or `model_signing`.
 - A one-shot "reproduce this quant" check that drives `llama-quantize` from a manifest.
 
 ## Development
@@ -282,4 +289,4 @@ the fingerprint specification.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/MysterionRise/ggufkit/blob/main/LICENSE).
