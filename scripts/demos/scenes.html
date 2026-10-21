@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ggufkit demos</title>
+<!--
+  Scenes for scripts/make_demos.py. render.mjs loads this page, calls
+  setup(name, demo, format) with the recorded demo, then renderAt(t) for every frame.
+  Everything on screen is a function of t, so frames are deterministic. Terminal text
+  is the recorded output of the commands, never typed in by hand.
+-->
+<style>
+:root {
+  --bg: #07090c;
+  --panel: #0d1117;
+  --panel-edge: #1f2630;
+  --ink: #e8edf2;
+  --dim: #7d8794;
+  --red: #ff5d5d;
+  --red-soft: rgba(255, 93, 93, .14);
+  --amber: #ffb547;
+  --amber-soft: rgba(255, 181, 71, .14);
+  --green: #3ddc84;
+  --green-soft: rgba(61, 220, 132, .14);
+  --cyan: #59c2ff;
+  --sans: "Inter Display", "Inter", sans-serif;
+  --mono: "JetBrains Mono", monospace;
+  --cap: 76px;
+  --cap-small: 58px;
+  --term: 30px;
+  --cap-zone: 430px;
+  --foot-zone: 330px;
+}
+.fmt-readme {
+  --cap: 64px;
+  --cap-small: 50px;
+  --term: 30px;
+  --cap-zone: 300px;
+  --foot-zone: 210px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1080px; height: 100%; background: var(--bg); overflow: hidden; }
+body { color: var(--ink); font-family: var(--sans); }
+#stage {
+  position: relative;
+  width: 1080px;
+  height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 38%, rgba(89, 194, 255, .07), transparent 70%),
+    var(--bg);
+}
+#progress { position: absolute; top: 18px; left: 40px; right: 40px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.12); overflow: hidden; z-index: 20; }
+#progress i { display: block; height: 100%; width: 0; background: rgba(255,255,255,.85); }
+
+/* captions */
+#captions { position: absolute; top: 40px; left: 56px; right: 56px; height: calc(var(--cap-zone) - 40px); }
+.cap {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  text-align: center;
+  font-weight: 800; font-size: var(--cap); line-height: 1.08; letter-spacing: -.02em;
+  opacity: 0;
+}
+.cap.small { font-size: var(--cap-small); line-height: 1.12; }
+.cap .sub { display: block; margin-top: 18px; font-size: .5em; font-weight: 600; color: var(--dim); letter-spacing: 0; }
+.r { color: var(--red); } .g { color: var(--green); } .a { color: var(--amber); } .c { color: var(--cyan); }
+
+/* terminal */
+#term {
+  position: absolute; left: 40px; right: 40px;
+  top: var(--cap-zone); bottom: var(--foot-zone);
+  background: var(--panel); border: 2px solid var(--panel-edge); border-radius: 26px;
+  box-shadow: 0 30px 80px rgba(0,0,0,.55);
+  overflow: hidden;
+}
+#term .bar { height: 58px; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 2px solid var(--panel-edge); }
+#term .bar span { width: 16px; height: 16px; border-radius: 50%; background: #2a313b; }
+#term .bar b { margin-left: 14px; font: 500 24px var(--mono); color: var(--dim); }
+#term .viewport { position: absolute; top: 60px; left: 0; right: 0; bottom: 0; padding: 22px 30px; overflow: hidden; }
+#term .content { font: 400 var(--term)/1.42 var(--mono); white-space: pre-wrap; word-break: break-all; }
+.line { display: none; }
+.line.on { display: block; }
+.line.cmd { color: var(--ink); font-weight: 500; }
+.line.cmd .p { color: var(--cyan); }
+.line.gap { height: .55em; }
+.line.time { color: var(--dim); font-size: .78em; }
+.line .hl { border-radius: 6px; }
+.line.flash { background: var(--hlbg, transparent); border-radius: 8px; }
+.caret { display: inline-block; width: .6em; height: 1.05em; margin-bottom: -.18em; background: var(--ink); }
+.spin { color: var(--cyan); }
+.b { font-weight: 700; }
+.d { color: var(--dim); }
+
+/* panels over the terminal */
+.panel {
+  position: absolute; left: 40px; right: 40px;
+  top: var(--cap-zone); bottom: var(--foot-zone);
+  border-radius: 26px; overflow: hidden; opacity: 0;
+  background: #000; border: 2px solid var(--panel-edge);
+}
+.camera { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.camera img { display: block; image-rendering: pixelated; }
+.box { position: absolute; border: 2px solid var(--amber); box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
+.panel.map { background: #161b22; }
+.scan { position: absolute; left: 0; background: var(--amber); box-shadow: 0 0 18px var(--amber); }
+.head { position: absolute; left: 28px; top: 22px; font: 600 26px/1.35 var(--mono); color: var(--ink); }
+.tag {
+  position: absolute; left: 24px; right: 24px; bottom: 24px;
+  font: 600 28px/1.3 var(--mono); color: var(--ink);
+  background: rgba(7,9,12,.82); border: 2px solid var(--amber); border-radius: 14px; padding: 14px 18px;
+}
+.tag .a { font-weight: 700; }
+.card { background: #f4f6f8; display: flex; align-items: center; justify-content: center; }
+.card img { image-rendering: pixelated; }
+.gaps { background: var(--panel); padding: 40px 44px; }
+.gaps h3 { font: 700 34px var(--sans); color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 26px; }
+.gaps .score { font: 800 120px/1 var(--sans); color: var(--red); margin-bottom: 26px; }
+.gaps .score small { font-size: .32em; color: var(--dim); font-weight: 600; letter-spacing: 0; }
+.gaps li { list-style: none; font: 500 36px/1.6 var(--mono); opacity: 0; }
+.gaps li b { color: var(--red); margin-right: 18px; }
+
+/* badges and footer */
+#badges { position: absolute; left: 40px; right: 40px; bottom: calc(var(--foot-zone) - 130px); height: 110px; }
+.badge {
+  position: absolute; left: 0; right: 0; top: 0;
+  display: flex; align-items: center; justify-content: center; gap: 18px;
+  height: 96px; border-radius: 48px;
+  font: 800 40px var(--sans); letter-spacing: .02em; opacity: 0;
+}
+.badge.red { color: var(--red); background: var(--red-soft); border: 2px solid rgba(255,93,93,.45); }
+.badge.green { color: var(--green); background: var(--green-soft); border: 2px solid rgba(61,220,132,.45); }
+.badge.amber { color: var(--amber); background: var(--amber-soft); border: 2px solid rgba(255,181,71,.45); }
+.badge small { font-weight: 600; font-size: .7em; opacity: .85; }
+#footer {
+  position: absolute; left: 56px; right: 56px; bottom: 34px; height: 64px;
+  display: flex; align-items: center; justify-content: space-between;
+  font: 600 26px var(--sans); color: var(--dim);
+}
+#footer .mark { display: flex; align-items: center; gap: 14px; color: var(--ink); font: 700 32px var(--mono); }
+#footer .mark svg { width: 34px; height: 38px; }
+#demo-chip {
+  position: absolute; left: 56px; right: 56px; bottom: 110px;
+  text-align: center; font: 700 24px var(--mono); letter-spacing: .06em;
+  color: var(--amber); display: none;
+}
+.fmt-readme #demo-chip { bottom: 96px; }
+.fmt-readme #badges { bottom: calc(var(--foot-zone) - 100px); }
+.fmt-readme .badge { height: 84px; font-size: 36px; }
+
+/* end card */
+#end {
+  position: absolute; inset: 0; z-index: 10; opacity: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 46px;
+  background: radial-gradient(ellipse 70% 45% at 50% 45%, rgba(61,220,132,.10), transparent 70%), var(--bg);
+  text-align: center; padding: 0 70px;
+}
+#end h1 { font: 800 96px/1.04 var(--sans); letter-spacing: -.025em; }
+.fmt-readme #end h1 { font-size: 84px; }
+#end .mark { display: flex; align-items: center; gap: 18px; font: 700 52px var(--mono); }
+#end .mark svg { width: 52px; height: 58px; }
+#end p { font: 600 30px/1.4 var(--sans); color: var(--dim); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="progress"><i></i></div>
+  <div id="captions"></div>
+  <div id="term">
+    <div class="bar"><span></span><span></span><span></span><b>~/models</b></div>
+    <div class="viewport"><div class="content"></div></div>
+  </div>
+  <div id="panels"></div>
+  <div id="badges"></div>
+  <div id="demo-chip">DEMO TAMPER · MADE FOR THIS VIDEO</div>
+  <div id="footer">
+    <div class="mark"><svg viewBox="0 0 34 38" aria-hidden="true"><path d="M17 1 32 7v11c0 9.5-6.4 16.4-15 19C8.4 34.4 2 27.5 2 18V7z" fill="none" stroke="#3ddc84" stroke-width="3"/><path d="m10 19 5 5 9-10" fill="none" stroke="#3ddc84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>ggufkit</div>
+    <div>real output · Qwen3-0.6B GGUF</div>
+  </div>
+  <div id="end"></div>
+</div>
+<script>
+"use strict";
+const $ = (s, root = document) => root.querySelector(s);
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const ease = (x) => 1 - Math.pow(1 - clamp(x), 3);
+const easeInOut = (x) => { x = clamp(x); return x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const mark = (s) => s.replace(/\[(r|g|a|c)\](.*?)\[\/\1\]/g, '<span class="$1">$2</span>');
+const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+
+let items = [];
+let duration = 0;
+
+function fade(el, t, start, end, { inDur = .28, outDur = .22, rise = 24 } = {}) {
+  const k = inDur > 0 ? clamp((t - start) / inDur) : Number(t >= start);
+  el.style.opacity = k * clamp((end - t) / outDur);
+  el.style.transform = `translateY(${(1 - ease(k)) * rise}px)`;
+}
+
+function colorize(line) {
+  let h = esc(line);
+  if (/^(Error|main\.go)/.test(line)) return `<span class="r">${h}</span>`;
+  if (/^WARNING/.test(line)) return `<span class="a d">${h}</span>`;
+  if (/^Verified OK/.test(line)) return `<span class="g b">${h}</span>`;
+  const sha = line.match(/^([0-9a-f]{64})(\s+)(\S+)$/);
+  if (sha) return `<span class="${sha[3] === "model.gguf" ? "g" : "r"}">${sha[1]}</span>${sha[2]}${esc(sha[3])}`;
+  return h
+    .replace(/^(verdict\s+)(metadata-only)/, '$1<span class="g b">$2</span>')
+    .replace(/^(verdict\s+)(weights-changed)/, '$1<span class="r b">$2</span>')
+    .replace(/^((?:kv|tensor_info|weights)\s+)(same)$/, '$1<span class="g">$2</span>')
+    .replace(/^((?:kv|tensor_info|weights)\s+)(differs)$/, '$1<span class="r">$2</span>')
+    .replace(/^(\s+~ )(.*)$/, '$1<span class="a">$2</span>')
+    .replace(/^(score\s+)(\d+\/\d+)/, '$1<span class="r b">$2</span>')
+    .replace(/^(gaps\s+)(.*)$/, '$1<span class="r">$2</span>')
+    .replace(/^(-&gt; .*)$/, '<span class="g">$1</span>')
+    .replace(/^(\* .*)$/, '<span class="g">$1</span>');
+}
+
+/* ---- timeline primitives ---- */
+
+function caption(start, end, html, opts = {}) {
+  const el = document.createElement("div");
+  el.className = "cap" + (opts.small ? " small" : "");
+  el.innerHTML = `<div>${mark(html)}</div>`;
+  $("#captions").append(el);
+  items.push((t) => fade(el, t, start, end, { inDur: opts.first ? 0 : .28 }));
+}
+
+function badge(start, end, html, kind) {
+  const el = document.createElement("div");
+  el.className = `badge ${kind}`;
+  el.innerHTML = html;
+  $("#badges").append(el);
+  items.push((t) => {
+    const k = clamp((t - start) / .22) * clamp((end - t) / .2);
+    el.style.opacity = k;
+    el.style.transform = `scale(${0.9 + 0.1 * ease((t - start) / .22)})`;
+  });
+}
+
+function addLine(cls, html) {
+  const el = document.createElement("div");
+  el.className = "line " + cls;
+  el.innerHTML = html;
+  $("#term .content").append(el);
+  return el;
+}
+
+/* Type a recorded command, show a spinner for `run` seconds, then print its output. */
+function command(start, step, { rate = 95, run = .45, stagger = .07, maxType = 1.5, timing = true } = {}) {
+  const lines = step.cmd;
+  const text = lines.join("\n");
+  const typeDur = Math.min(maxType, Math.max(.35, text.length / rate));
+  const typed = [];
+  lines.forEach(() => typed.push(addLine("cmd", "")));
+  const spin = addLine("spin", "");
+  const outs = step.output.split("\n").map((l) => addLine("out", colorize(l)));
+  const time = timing ? addLine("time", `⏱ ${step.seconds.toFixed(1)} s`) : null;
+  const gap = addLine("gap", "");
+  const tDone = start + typeDur;
+  const tOut = tDone + run;
+  items.push((t) => {
+    const n = Math.floor(clamp((t - start) / typeDur) * text.length);
+    let used = 0;
+    lines.forEach((l, i) => {
+      const el = typed[i];
+      const k = clamp(n - used, 0, l.length);
+      const typing = t >= start && t < tDone && n >= used && n <= used + l.length;
+      const on = t >= start && (n > used || i === 0);
+      used += l.length + 1;
+      el.classList.toggle("on", on);
+      if (!on) return;
+      const shown = l.slice(0, k);
+      const body = shown.startsWith("$") ? `<span class="p">$</span>${esc(shown.slice(1))}` : esc(shown);
+      el.innerHTML = body + (typing ? '<span class="caret"></span>' : "");
+    });
+    const spinning = t >= tDone && t < tOut;
+    spin.classList.toggle("on", spinning);
+    if (spinning) spin.textContent = SPIN[Math.floor((t - tDone) * 12) % SPIN.length] + " running";
+    outs.forEach((el, i) => el.classList.toggle("on", t >= tOut + i * stagger));
+    const tEnd = tOut + outs.length * stagger;
+    if (time) time.classList.toggle("on", t >= tEnd);
+    gap.classList.toggle("on", t >= tEnd);
+  });
+  return { end: tOut + outs.length * stagger, outs };
+}
+
+/* Tint the background of output lines matching `re` between start and end. */
+function flash(outs, re, start, end, colour = "rgba(255,181,71,.18)") {
+  const hits = outs.filter((el) => re.test(el.textContent));
+  items.push((t) => {
+    const k = clamp((t - start) / .2) * clamp((end - t) / .25);
+    hits.forEach((el) => {
+      el.classList.toggle("flash", k > 0);
+      el.style.setProperty("--hlbg", colour.replace(/[\d.]+\)$/, (a) => `${parseFloat(a) * k})`));
+    });
+  });
+}
+
+function scrollTerm() {
+  const vp = $("#term .viewport"), content = $("#term .content");
+  const avail = vp.clientHeight - 44;
+  const over = content.scrollHeight - avail;
+  content.style.transform = `translateY(${-Math.max(0, over)}px)`;
+}
+
+function panel(cls) {
+  const el = document.createElement("div");
+  el.className = "panel " + cls;
+  $("#panels").append(el);
+  return el;
+}
+
+function endCard(start, html, note) {
+  const el = $("#end");
+  el.innerHTML = `<h1>${mark(html)}</h1>${$("#footer .mark").outerHTML}${note ? `<p>${note}</p>` : ""}`;
+  items.push((t) => {
+    const k = clamp((t - start) / .4);
+    el.style.opacity = k;
+    $("h1", el).style.transform = `scale(${0.94 + 0.06 * ease((t - start) / .5)})`;
+  });
+}
+
+/* ---- the four demos ---- */
+
+const SCENES = {
+  signature(d) {
+    const [cosign, verify] = d.steps;
+    caption(0, 3.6, "Your model's signature<br>just [r]failed[/r].", { first: true });
+    let s = command(.5, cosign, { maxType: 1.3 });
+    badge(s.end + .1, 7.6, "✗ SIGNATURE CHECK FAILED", "red");
+    caption(3.6, 7.6, "Typo fix… or<br>[r]swapped weights[/r]?<span class=\"sub\">The signature can't tell you.</span>");
+    s = command(7.0, verify);
+    caption(7.6, 11.0, "Ask what the file<br>[c]is made of[/c].");
+    flash(s.outs, /^(weights\s+same|\s+~ general\.name)/, s.end + .3, 15.4, "rgba(61,220,132,.2)");
+    badge(s.end + .3, 15.4, "✓ WEIGHTS UNTOUCHED <small>· only the name changed</small>", "green");
+    caption(11.0, 15.4, "Same failure.<br>[g]Harmless[/g] change.<span class=\"sub\">metadata-only: general.name, nothing else</span>");
+    endCard(15.4, "Sign the bytes.<br>[g]Fingerprint the model.[/g]", "verify a GGUF by what it contains, not just its hash");
+    return { duration: 19, poster: 13.2 };
+  },
+
+  tamper(d) {
+    const f = d.facts;
+    const [sha, cosign, verify, viz] = d.steps;
+    $("#demo-chip").style.display = "block";
+    const n = f.changed_weights.toLocaleString("en-US");
+    const total = Math.round(f.total_weights / 1e6);
+    caption(0, 3.4, `I changed [r]${n} weights[/r]<br>in a ${total}M-parameter model.<span class="sub">Can you find them?</span>`, { first: true, small: true });
+    command(.6, sha, { timing: false });
+    caption(3.4, 6.4, "A hash says<br>[r]different[/r]. That's all.");
+    let s = command(5.8, cosign, { maxType: 1.1 });
+    badge(s.end + .1, 9.6, "✗ SIGNATURE CHECK FAILED", "red");
+    caption(6.4, 9.6, "A signature check:<br>[r]same answer[/r].");
+    s = command(9.2, verify);
+    flash(s.outs, /blk\.12\.ffn_up\.weight/, s.end + .2, 13.6);
+    caption(9.6, 13.4, "ggufkit: [a]one tensor[/a]<br>out of 310.");
+    s = command(12.5, viz, { maxType: .9, run: .35 });
+    const tMap = Math.max(13.6, s.end + .3);
+
+    // The error map, panned from the top of the tensor down to the tampered block, then zoomed.
+    const p = panel("map");
+    const [rows, cols] = f.shape;
+    const cam = document.createElement("div");
+    cam.className = "camera";
+    cam.innerHTML = `<img src="${d.images.where}" width="${cols}" height="${rows}">` +
+      `<div class="box" style="left:${f.cols[0]}px;top:${f.rows[0]}px;width:${f.cols[1] - f.cols[0] + 1}px;height:${f.rows[1] - f.rows[0] + 1}px"></div>`;
+    p.append(cam);
+    const tag = document.createElement("div");
+    tag.className = "tag";
+    tag.innerHTML = `<span class="a">${esc(f.tensor)}</span><br>rows ${f.rows[0]}–${f.rows[1]} · cols ${f.cols[0]}–${f.cols[1]}`;
+    p.append(tag);
+    const box = $(".box", cam);
+    const scan = document.createElement("div");
+    scan.className = "scan";
+    scan.style.width = `${cols}px`;
+    cam.append(scan);
+    const head = document.createElement("div");
+    head.className = "head";
+    head.innerHTML = `${esc(f.tensor)} · ${rows} × ${cols}<br><span class="d">error vs the signed original</span>`;
+    p.append(head);
+    // Whole tensor first, a scan line down to the block, then a zoom onto it.
+    const tScan = tMap + .4, tZoom = tScan + 1.7, tHold = tZoom + 1.6, tEnd = tHold + 2.4;
+    items.push((t) => {
+      p.style.opacity = clamp((t - tMap) / .3) * clamp((tEnd - t) / .3);
+      const W = p.clientWidth, H = p.clientHeight;
+      const cx = (f.cols[0] + f.cols[1]) / 2, cy = (f.rows[0] + f.rows[1]) / 2;
+      const s0 = (H * 0.8) / rows, s1 = (W * 0.9) / (f.cols[1] - f.cols[0] + 1);
+      const u = easeInOut((t - tZoom) / (tHold - tZoom));
+      const sc = s0 * Math.pow(s1 / s0, u);
+      const vx = cols / 2 + (cx - cols / 2) * u;
+      const vy = rows / 2 + (cy - rows / 2) * u;
+      cam.style.transform = `translate(${W / 2 - vx * sc}px, ${H / 2 - vy * sc}px) scale(${sc})`;
+      const sp = ease((t - tScan) / (tZoom - tScan));
+      scan.style.top = `${cy * sp}px`;
+      scan.style.height = `${3 / sc}px`;
+      scan.style.opacity = clamp((t - tScan) / .2) * clamp((tZoom + .3 - t) / .3);
+      box.style.borderWidth = `${3 / sc}px`;
+      box.style.opacity = clamp((t - (tZoom - .2)) / .3);
+      head.style.opacity = clamp((t - tMap) / .3) * clamp((tZoom + .4 - t) / .3);
+      tag.style.opacity = clamp((t - (tHold - .4)) / .3);
+    });
+    caption(13.4, tEnd, "…and [a]exactly where[/a].");
+    badge(tHold - .4, tEnd, `${f.percent}% <small>of the weights · found in ${verify.seconds.toFixed(1)} s</small>`, "amber");
+    endCard(tEnd, `${n} weights changed.<br>[a]Found. Located.[/a]`, "demo tamper made for this video · real ggufkit output");
+    return { duration: tEnd + 4.2, poster: tHold + .6 };
+  },
+
+  label(d) {
+    const f = d.facts;
+    const [verify, layers] = d.steps;
+    caption(0, 3.8, "Two files. [c]Same metadata.[/c]<br>Both say Q4_K_M.", { first: true });
+    let s = command(.5, verify, { stagger: .03, run: .5 });
+    flash(s.outs, /^(kv\s+same|tensor_info\s+differs)/, s.end, s.end + 2);
+    caption(3.8, 8.2, `[r]${f.retyped} of ${f.n_tensors}[/r] tensors<br>are stored differently.`);
+    badge(2.4, 8.2, "kv same · tensor_info differs", "amber");
+    s = command(8.0, layers, { run: .4 });
+    const tCard = s.end + .35;
+    const p = panel("card");
+    const img = document.createElement("img");
+    img.src = d.images.layers;
+    p.append(img);
+    items.push((t) => {
+      p.style.opacity = clamp((t - tCard) / .35) * clamp((18.2 - t) / .3);
+      const k = Math.min((p.clientWidth - 40) / img.naturalWidth, (p.clientHeight - 40) / img.naturalHeight);
+      img.style.width = `${img.naturalWidth * k}px`;
+      img.style.transform = `translateY(${(1 - ease((t - tCard) / .5)) * 60}px)`;
+    });
+    caption(8.2, 13.6, "Left: llama.cpp's recipe.<br>Right: [a]a dynamic mix[/a].", { small: true });
+    caption(13.6, 18.2, "Not a bug: [a]one file_type number[/a] can't describe a per-tensor mix.", { small: true });
+    endCard(18.2, "A label is<br>[c]not an identity.[/c]", "check what a GGUF contains, not what it says");
+    return { duration: 22, poster: 12.4 };
+  },
+
+  provenance(d) {
+    const f = d.facts;
+    const [manifest, attest, check] = d.steps;
+    caption(0, 3.6, "Where did this model<br>come from? [c]Ask the file.[/c]", { first: true });
+    let s = command(.5, manifest, { stagger: .09 });
+    const tList = s.end + .5;
+    const p = panel("gaps");
+    const [got, of] = f.score.split("/");
+    p.innerHTML = `<h3>Provenance in this file</h3><div class="score">${got}<small> of ${of} items recorded</small></div><h3>Missing</h3><ul>` +
+      f.gaps.map((g) => `<li><b>✗</b>${esc(g)}</li>`).join("") + "</ul>";
+    const lis = [...p.querySelectorAll("li")];
+    items.push((t) => {
+      p.style.opacity = clamp((t - tList) / .3) * clamp((10.6 - t) / .3);
+      lis.forEach((li, i) => { li.style.opacity = clamp((t - tList - .5 - i * .32) / .2); });
+    });
+    caption(3.6, 7.4, `It records [r]${got} of ${of}[/r]<br>provenance items.`);
+    caption(7.4, 10.6, "GGUF has [r]no standard key[/r] for the source checksum, the llama.cpp version or the quantize command.", { small: true });
+    s = command(10.4, attest, { maxType: 1.1 });
+    caption(10.6, 14.6, "Record what's there<br>and what isn't. [g]Sign it.[/g]");
+    s = command(s.end + .6, check, { maxType: 1.1 });
+    badge(s.end + .1, 19.4, "✓ SIGNED MANIFEST VERIFIED", "green");
+    caption(14.6, 19.4, "Now the record<br>[g]travels with the model[/g].");
+    endCard(19.4, "Record it. Sign it.<br>[g]Check it.[/g]", "ggufkit manifest · in-toto · cosign");
+    return { duration: 23, poster: 7.0 };
+  },
+};
+
+window.setup = (name, demo, format) => {
+  document.body.className = `fmt-${format}`;
+  items = [];
+  const meta = SCENES[name](demo);
+  duration = meta.duration;
+  items.push((t) => { $("#progress i").style.width = `${100 * clamp(t / duration)}%`; });
+  items.push(scrollTerm);
+  return meta;
+};
+
+window.ready = () => Promise.all([document.fonts.ready, ...[...document.images].map((i) => i.decode())]);
+window.renderAt = (t) => { for (const f of items) f(t); };
+</script>
+</body>
+</html>
