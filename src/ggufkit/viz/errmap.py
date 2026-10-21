@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from ggufkit._util import non_negative_int, positive_float, to_stderr
 from ggufkit.diff import (
     NUMERIC_CHUNK_BYTES,
     ErrorAccumulator,
@@ -281,7 +282,7 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     )
     p.add_argument(
         "--max-pixels",
-        type=int,
+        type=non_negative_int,
         default=DEFAULT_MAX_PIXELS,
         metavar="N",
         help="pool tensors larger than N pixels (default: %(default)s; 0 = never)",
@@ -297,7 +298,9 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         action="store_true",
         help="use one colour scale for every rendered tensor so images are comparable",
     )
-    p.add_argument("--scale", type=float, default=1.0, help="resize factor (nearest-neighbour)")
+    p.add_argument(
+        "--scale", type=positive_float, default=1.0, help="resize factor (nearest-neighbour)"
+    )
     p.add_argument("--no-caption", action="store_true", help="omit the caption and colour bar")
     p.add_argument("--force", action="store_true", help="overwrite existing images")
     p.add_argument("-q", "--quiet", action="store_true", help="do not report progress")
@@ -317,6 +320,7 @@ def run(args: argparse.Namespace) -> int:
         print("error: rendering needs Pillow: pip install 'ggufkit[viz]'", file=sys.stderr)
         return 2
     say: Callable[[str], None] = (lambda _m: None) if args.quiet else print
+    warn: Callable[[str], None] = (lambda _m: None) if args.quiet else to_stderr
 
     maps: list[ErrorMap] = []
     with open_model(args.a) as ma, open_model(args.b) as mb:
@@ -330,14 +334,14 @@ def run(args: argparse.Namespace) -> int:
         ]
         if not (args.match_glob or args.match_regex):
             for missing in [n for n in args.tensor if n not in names]:
-                say(f"! Skipping {missing!r}: not in both models")
+                warn(f"! Skipping {missing!r}: not in both models")
         for name in names:
             ta, tb = ma.tensor(name), mb.tensor(name)
             if len(ta.shape) == 1 and (args.match_glob or args.match_regex) and not args.match_1d:
                 continue
             why = comparable(ta, tb)
             if why is not None:
-                say(f"! Skipping {name!r}: {why}")
+                warn(f"! Skipping {name!r}: {why}")
                 continue
             maps.append(
                 error_map(
@@ -352,7 +356,7 @@ def run(args: argparse.Namespace) -> int:
             )
     if not maps:
         print("error: no comparable tensors matched", file=sys.stderr)
-        return 1
+        return 2
 
     shared = max(scale_top(m.values, args.percentile) for m in maps) if args.shared_scale else None
     single = len(maps) == 1

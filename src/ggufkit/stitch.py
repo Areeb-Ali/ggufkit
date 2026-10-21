@@ -16,6 +16,7 @@ import numpy as np
 from gguf import GGUFEndian, GGUFValueType, GGUFWriter
 from gguf.constants import Keys
 
+from ggufkit._util import atomic_output, prepare_output, to_stderr
 from ggufkit.canon import UnsupportedModelError
 from ggufkit.model import Model, open_model
 
@@ -23,17 +24,17 @@ if TYPE_CHECKING:
     import argparse
     from collections.abc import Callable, Iterable
 
-Logger = "Callable[[str], None]"
-
 
 def copy_metadata(writer: GGUFWriter, model: Model, *, skip: Iterable[str] = ()) -> list[str]:
     """Add every metadata entry of ``model`` to ``writer``; return the names copied.
 
-    ``general.architecture`` is skipped because the writer adds it itself. Arrays nested more
-    than one level deep are refused: the reader flattens them, so they cannot be copied
-    faithfully.
+    ``general.architecture`` is skipped because the writer adds it itself, and
+    ``general.alignment`` because the writer must also pad the tensor data to it (see
+    :func:`stitch`). Arrays nested more than one level deep are refused: the reader flattens
+    them, so they cannot be copied faithfully. So are empty arrays, which ``GGUFWriter``
+    cannot write.
     """
-    skipped = set(skip) | {Keys.General.ARCHITECTURE}
+    skipped = set(skip) | {Keys.General.ARCHITECTURE, Keys.General.ALIGNMENT}
     copied: list[str] = []
     for f in model.metadata_fields():
         if f.name in skipped:
@@ -41,6 +42,9 @@ def copy_metadata(writer: GGUFWriter, model: Model, *, skip: Iterable[str] = ())
         vtype = f.types[0]
         try:
             if vtype == GGUFValueType.ARRAY:
+                if not f.data:
+                    msg = f"Cannot copy empty array metadata entry {f.name!r}: GGUFWriter cannot write empty arrays"
+                    raise UnsupportedModelError(msg)
                 if len(f.types) != 2:
                     msg = f"Cannot copy nested array metadata entry {f.name!r}"
                     raise UnsupportedModelError(msg)
@@ -71,9 +75,7 @@ def stitch(
     if output.resolve() in inputs:
         msg = "The output file must differ from the input files"
         raise ValueError(msg)
-    if output.exists() and not force:
-        msg = f"{output} already exists (use --force to overwrite)"
-        raise FileExistsError(msg)
+    prepare_output(output, force=force)
 
     say(f"* Metadata source: {metadata}")
     with open_model(metadata) as md:
@@ -92,35 +94,45 @@ def stitch(
             else:
                 say("* No tensor source given: writing a vocab-only model")
 
-            writer = GGUFWriter(output, arch, use_temp_file=False)
-            copied = copy_metadata(writer, md)
-            say(f"* Copied {len(copied)} metadata entries")
-
-            if td is not None:
-                for t in td.tensors:
-                    writer.add_tensor_info(
-                        t.name,
-                        [int(v) for v in reversed(t.shape)],
-                        np.dtype(np.float32),
-                        int(t.n_bytes),
-                        raw_dtype=t.tensor_type,
-                    )
-
-            writer.write_header_to_file()
-            writer.write_kv_data_to_file()
-            writer.write_ti_data_to_file()
-            if td is not None:
-                n = len(td.tensors)
-                for i, t in enumerate(td.tensors, 1):
-                    size = t.n_bytes / (1024 * 1024)
-                    say(f"  {i:4}/{n:<4} {t.tensor_type.name:<7} {size:9.2f} MiB  {t.name}")
-                    writer.write_tensor_data(t.data, tensor_endianess=GGUFEndian.LITTLE)
-            writer.close()
+            with atomic_output(output) as tmp:
+                writer = GGUFWriter(tmp, arch, use_temp_file=False)
+                try:
+                    _write(writer, md, td, say)
+                finally:
+                    writer.close()
         finally:
             if td is not None:
                 td.close()
     say(f"* Wrote {output}")
     return output
+
+
+def _write(writer: GGUFWriter, md: Model, td: Model | None, say: Callable[[str], None]) -> None:
+    if Keys.General.ALIGNMENT in md.fields:
+        # Sets the metadata entry and makes the writer pad the tensor data to match it.
+        writer.add_custom_alignment(md.alignment)
+    copied = copy_metadata(writer, md)
+    say(f"* Copied {len(copied)} metadata entries")
+
+    if td is not None:
+        for t in td.tensors:
+            writer.add_tensor_info(
+                t.name,
+                [int(v) for v in reversed(t.shape)],
+                np.dtype(np.float32),
+                int(t.n_bytes),
+                raw_dtype=t.tensor_type,
+            )
+
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_ti_data_to_file()
+    if td is not None:
+        n = len(td.tensors)
+        for i, t in enumerate(td.tensors, 1):
+            size = t.n_bytes / (1024 * 1024)
+            say(f"  {i:4}/{n:<4} {t.tensor_type.name:<7} {size:9.2f} MiB  {t.name}")
+            writer.write_tensor_data(t.data, tensor_endianess=GGUFEndian.LITTLE)
 
 
 def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -146,6 +158,6 @@ def run(args: argparse.Namespace) -> int:
         args.tensors,
         args.output,
         force=args.force,
-        log=None if args.quiet else print,
+        log=None if args.quiet else to_stderr,
     )
     return 0

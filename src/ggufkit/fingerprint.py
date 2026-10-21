@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ggufkit import canon
+from ggufkit._util import positive_int, prepare_output, write_text_atomic
 from ggufkit.model import open_model
 
 if TYPE_CHECKING:
@@ -223,6 +224,7 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     p.add_argument("model", type=Path, help="GGUF file, or any shard of a split model")
     p.add_argument("--json", action="store_true", help="print the fingerprint as JSON")
     p.add_argument("-o", "--output", type=Path, help="also write the JSON fingerprint to this file")
+    p.add_argument("--force", action="store_true", help="overwrite --output if it exists")
     p.add_argument(
         "--no-data",
         action="store_true",
@@ -233,7 +235,7 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     p.add_argument(
         "-j",
         "--jobs",
-        type=int,
+        type=positive_int,
         default=default_jobs(),
         help="threads used to hash tensors (default: %(default)s)",
     )
@@ -241,16 +243,18 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.output is not None:
+        prepare_output(args.output, force=args.force)
     with open_model(args.model) as model:
         fp = fingerprint(
             model,
             data=not args.no_data,
             per_tensor=not args.no_per_tensor,
             per_kv=args.per_kv,
-            jobs=max(1, args.jobs),
+            jobs=args.jobs,
         )
     if args.output is not None:
-        args.output.write_text(json.dumps(fp.to_dict(), indent=2) + "\n", encoding="utf-8")
+        write_text_atomic(args.output, json.dumps(fp.to_dict(), indent=2) + "\n")
     if args.json:
         json.dump(fp.to_dict(), sys.stdout, indent=2)
         sys.stdout.write("\n")

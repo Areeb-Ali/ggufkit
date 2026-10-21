@@ -38,7 +38,7 @@ dependencies = [
 viz = ["pillow>=10"]
 
 [project.scripts]
-ggufkit = "ggufkit.cli:main"
+ggufkit = "ggufkit.cli:entry"
 
 [project.urls]
 Homepage = "https://github.com/MysterionRise/ggufkit"

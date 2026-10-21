@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ggufkit import canon
+from ggufkit._util import positive_int
 from ggufkit.fingerprint import Fingerprint, default_jobs, fingerprint
 from ggufkit.manifest import load_manifest, sha256_file
 from ggufkit.model import open_model
@@ -382,7 +383,9 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         action="store_true",
         help="with --manifest: also check the raw file hashes it recorded",
     )
-    p.add_argument("-j", "--jobs", type=int, default=default_jobs(), help="hashing threads")
+    p.add_argument(
+        "-j", "--jobs", type=positive_int, default=default_jobs(), help="hashing threads"
+    )
     p.add_argument("-q", "--quiet", action="store_true", help="print nothing; use the exit status")
     p.set_defaults(func=run)
 
@@ -392,7 +395,7 @@ def run(args: argparse.Namespace) -> int:
         msg = "--file-sha256 needs --manifest: there are no recorded file hashes to check"
         raise ValueError(msg)
     ignore = comma_list(args.ignore_keys)
-    jobs = max(1, args.jobs)
+    jobs = args.jobs
     with open_model(args.model) as model:
         if args.manifest is not None:
             manifest = load_manifest(args.manifest)

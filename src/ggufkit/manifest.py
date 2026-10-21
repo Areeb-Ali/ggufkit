@@ -24,6 +24,7 @@ from gguf import GGMLQuantizationType, GGUFEndian
 from gguf.constants import Keys, LlamaFileType
 
 from ggufkit import __version__, canon
+from ggufkit._util import positive_int, prepare_output, write_text_atomic
 from ggufkit.fingerprint import Fingerprint, default_jobs, fingerprint
 from ggufkit.model import SHARD_RE, open_model
 
@@ -361,12 +362,52 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
     if not isinstance(fp, dict) or fp.get("spec") != canon.SPEC_ID:
         msg = f"{path} carries a fingerprint spec ggufkit does not understand"
         raise ManifestError(msg)
+    _check_structure(path, manifest)
     return manifest
+
+
+def _check_structure(path: str | Path, manifest: dict[str, Any]) -> None:
+    """Refuse a manifest whose fields have the wrong shape, before anything relies on them."""
+
+    def bad(what: str) -> ManifestError:
+        return ManifestError(f"{path} is malformed: {what}")
+
+    fp = manifest["fingerprint"]
+    for key in ("kv", "tensor_info"):
+        if not isinstance(fp.get(key), str):
+            raise bad(f"fingerprint.{key} must be a hex string")
+    for key in ("weights", "overall"):
+        if fp.get(key) is not None and not isinstance(fp[key], str):
+            raise bad(f"fingerprint.{key} must be a hex string or null")
+    kvs = fp.get("kvs")
+    if kvs is not None and not (
+        isinstance(kvs, dict) and all(isinstance(v, str) for v in kvs.values())
+    ):
+        raise bad("fingerprint.kvs must map keys to hex strings")
+    tensors = fp.get("tensors")
+    if tensors is not None:
+        if not isinstance(tensors, dict):
+            raise bad("fingerprint.tensors must be an object")
+        for name, t in tensors.items():
+            if not (
+                isinstance(t, dict)
+                and isinstance(t.get("type"), str)
+                and isinstance(t.get("shape"), list)
+                and isinstance(t.get("info"), str)
+                and (t.get("data") is None or isinstance(t["data"], str))
+            ):
+                raise bad(f"fingerprint.tensors[{name!r}] needs type, shape, info and data")
+    files = manifest.get("files")
+    if files is not None and not (
+        isinstance(files, list)
+        and all(isinstance(f, dict) and isinstance(f.get("path"), str) for f in files)
+    ):
+        raise bad("files must be a list of objects with a path")
 
 
 def save_manifest(path: str | Path, manifest: Mapping[str, Any]) -> Path:
     path = Path(path)
-    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    write_text_atomic(path, json.dumps(manifest, indent=2) + "\n")
     return path
 
 
@@ -474,7 +515,9 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     p.add_argument("--note", help="free-text note stored in the manifest")
     p.add_argument("--no-data", action="store_true", help="skip tensor bytes (no weights digest)")
     p.add_argument("--no-per-tensor", action="store_true", help="omit per-tensor digests")
-    p.add_argument("-j", "--jobs", type=int, default=default_jobs(), help="hashing threads")
+    p.add_argument(
+        "-j", "--jobs", type=positive_int, default=default_jobs(), help="hashing threads"
+    )
     p.add_argument("--force", action="store_true", help="overwrite an existing manifest")
     p.add_argument("-q", "--quiet", action="store_true", help="print nothing but errors")
     p.set_defaults(func=run)
@@ -485,9 +528,8 @@ def run(args: argparse.Namespace) -> int:
     to_stdout_only = args.output is not None and str(args.output) == "-"
     target = None if to_stdout_only else (args.output or default_manifest_path(args.model))
     for path in (target, args.intoto):
-        if path is not None and path.exists() and not args.force:
-            msg = f"{path} already exists (use --force to overwrite)"
-            raise FileExistsError(msg)
+        if path is not None:
+            prepare_output(path, force=args.force)
     with open_model(args.model) as model:
         manifest = build_manifest(
             model,
@@ -496,14 +538,12 @@ def run(args: argparse.Namespace) -> int:
             notes=args.note,
             data=not args.no_data,
             per_tensor=not args.no_per_tensor,
-            jobs=max(1, args.jobs),
+            jobs=args.jobs,
         )
     if target is not None:
         save_manifest(target, manifest)
     if args.intoto is not None:
-        args.intoto.write_text(
-            json.dumps(to_intoto_statement(manifest), indent=2) + "\n", encoding="utf-8"
-        )
+        write_text_atomic(args.intoto, json.dumps(to_intoto_statement(manifest), indent=2) + "\n")
     if args.json or to_stdout_only:
         json.dump(manifest, sys.stdout, indent=2)
         sys.stdout.write("\n")
