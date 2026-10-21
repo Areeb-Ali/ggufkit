@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use ggufkit in your work, please cite it as below."
+title: "ggufkit: fingerprint, verify and visualize GGUF models"
+type: software
+authors:
+  - family-names: Perikov
+    given-names: Konstantin
+  - alias: KerfuffleV2
+    name: Kerfuffle
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/MysterionRise/ggufkit"
+keywords:
+  - gguf
+  - llama.cpp
+  - quantization
+  - provenance
+  - model signing
+abstract: >-
+  ggufkit gives GGUF model files an order-independent content fingerprint, a provenance
+  manifest that records what a file claims and what it leaves out, verification against either,
+  and images of quantization error and quantization recipes.

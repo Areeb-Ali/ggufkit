@@ -1,0 +1,36 @@
+name: Bug report
+description: Something ggufkit did wrong, crashed on, or reported incorrectly
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what ggufkit did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output
+      description: The exact command and its full output, including any traceback.
+      render: console
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model file
+      description: Where the GGUF came from (for example a Hugging Face repo, file name and revision), or how you made it.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `ggufkit --version` and `pip show gguf | head -2`, plus your OS and Python version.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: >-
+        Security problems, such as a file that crashes ggufkit or makes it use unbounded memory,
+        should be reported privately; see SECURITY.md.
