@@ -32,7 +32,7 @@ can then run `ggufkit verify model-Q4_K_M.gguf --manifest model-Q4_K_M.manifest.
 | `files[]` | one entry per shard: `path` (file name), `size`, `sha256` (raw bytes, `null` unless `--file-sha256`), `shard` (`{no, count}` or `null`) |
 | `gguf` | `version`, `endianness`, `alignment`, `n_kv`, `n_tensors`, `n_shards` |
 | `model` | `architecture`, `file_type` (e.g. `Q4_K_M`, as claimed by `general.file_type`), `file_type_id`, `quantization_version`, `parameter_count`, `tensor_bytes`, `tensor_type_counts`, `tensor_type_bytes` |
-| `provenance` | what the metadata says; only keys that are present: `uuid`, `name`, `author`, `version`, `organization`, `basename`, `finetune`, `size_label`, `description`, `quantized_by`, `url`, `doi`, `repo_url`, `tags`, `languages`, `license {id, name, link}`, `source {url, doi, uuid, repo_url}`, `base_models[]`, `datasets[]`, `imatrix {chunk_count, chunk_size, datasets}` |
+| `provenance` | what the metadata says; only keys that are present: `uuid`, `name`, `author`, `version`, `organization`, `basename`, `finetune`, `size_label`, `description`, `quantized_by`, `url`, `doi`, `repo_url`, `tags`, `languages`, `license {id, name, link}`, `source {url, doi, uuid, repo_url}`, `base_models[]`, `datasets[]`, `imatrix {file, dataset, entries_count, chunks_count}` (from llama.cpp's `quantize.imatrix.*` keys; `datasets`, `chunk_count`, `chunk_size` when a file carries `imatrix.*` keys instead) |
 | `provenance_gaps` | ids from the table below that this file does not satisfy |
 | `provenance_score` | `{recorded, expected}` |
 | `build_inputs` | the `--input KEY=VALUE` pairs, verbatim |
@@ -47,7 +47,7 @@ can then run `ggufkit verify model-Q4_K_M.gguf --manifest model-Q4_K_M.manifest.
 | `general.quantized_by` | present and non-empty |
 | `general.license` | any of `general.license`, `general.license.name`, `general.license.link` |
 | `general.uuid` | present |
-| `imatrix.datasets` | present; only expected when some tensor is stored below 8 bits |
+| `quantize.imatrix.dataset` | present (llama.cpp's quantize tool writes it when an importance matrix is used; `imatrix.datasets` also counts); only expected when some tensor is stored below 8 bits |
 | `build_inputs.source_sha256` | supplied with `--input` |
 | `build_inputs.imatrix_sha256` | supplied with `--input`; only expected below 8 bits |
 | `build_inputs.llama_cpp_commit` | supplied with `--input` |

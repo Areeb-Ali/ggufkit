@@ -180,7 +180,8 @@ def provenance_kv() -> dict[str, Any]:
         "general.dataset.count": 1,
         "general.dataset.0.name": "calib",
         "general.tags": ["chat", "test"],
-        "imatrix.datasets": ["calibration.txt"],
-        "imatrix.chunk_count": 128,
-        "imatrix.chunk_size": 512,
+        "quantize.imatrix.file": "imatrix.dat",
+        "quantize.imatrix.dataset": "calibration.txt",
+        "quantize.imatrix.entries_count": 196,
+        "quantize.imatrix.chunks_count": 128,
     }

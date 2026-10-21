@@ -79,9 +79,10 @@ def test_provenance_extraction_and_gaps(tmp_path: Path) -> None:
     ]
     assert prov["datasets"] == [{"name": "calib"}]
     assert prov["imatrix"] == {
-        "chunk_count": 128,
-        "chunk_size": 512,
-        "datasets": ["calibration.txt"],
+        "file": "imatrix.dat",
+        "dataset": "calibration.txt",
+        "entries_count": 196,
+        "chunks_count": 128,
     }
     assert prov["tags"] == ["chat", "test"]
     gaps = provenance_gaps(prov, {}, quantized=True)
@@ -108,9 +109,24 @@ def test_unquantized_models_do_not_expect_an_imatrix(tmp_path: Path) -> None:
     )[0]
     with open_model(path) as model:
         m = build_manifest(model)
-    assert "imatrix.datasets" not in m["provenance_gaps"]
+    assert "quantize.imatrix.dataset" not in m["provenance_gaps"]
     assert "build_inputs.imatrix_sha256" not in m["provenance_gaps"]
     assert m["provenance_score"]["expected"] == 7
+
+
+def test_imatrix_data_file_keys_also_count(tmp_path: Path) -> None:
+    kv = {**tiny_kv(), "imatrix.datasets": ["calibration.txt"], "imatrix.chunk_count": 64}
+    path = write_gguf(tmp_path / "legacy.gguf", kv=kv, tensors=tiny_tensors())[0]
+    with open_model(path) as model:
+        m = build_manifest(model, data=False)
+    assert m["provenance"]["imatrix"] == {"datasets": ["calibration.txt"], "chunk_count": 64}
+    assert "quantize.imatrix.dataset" not in m["provenance_gaps"]
+
+
+def test_missing_imatrix_is_a_gap_for_quantized_files(tiny_gguf: Path) -> None:
+    with open_model(tiny_gguf) as model:
+        m = build_manifest(model, data=False)
+    assert "quantize.imatrix.dataset" in m["provenance_gaps"]
 
 
 def test_file_type_labels() -> None:

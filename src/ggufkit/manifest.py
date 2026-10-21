@@ -56,13 +56,21 @@ _HIGH_PRECISION = frozenset(
     }
 )
 
+#: Keys llama.cpp's quantize tool writes into a model quantized with an importance matrix.
+QUANTIZE_IMATRIX_KEYS = {
+    "file": "quantize.imatrix.file",
+    "dataset": "quantize.imatrix.dataset",
+    "entries_count": "quantize.imatrix.entries_count",
+    "chunks_count": "quantize.imatrix.chunks_count",
+}
+
 #: What a verifiable file records, as (id, explanation). Order is the order in reports.
 EXPECTED_PROVENANCE: tuple[tuple[str, str], ...] = (
     ("general.source.*", "where the weights came from (source url, repo or uuid, or a base model)"),
     ("general.quantized_by", "who produced this file"),
     ("general.license", "the licence the file is distributed under"),
     ("general.uuid", "a stable identifier for the model"),
-    ("imatrix.datasets", "the importance-matrix data used for sub-8-bit quantization"),
+    ("quantize.imatrix.dataset", "the importance-matrix data used for sub-8-bit quantization"),
     ("build_inputs.source_sha256", "hash of the full-precision source the quant was made from"),
     ("build_inputs.imatrix_sha256", "hash of the importance matrix file"),
     ("build_inputs.llama_cpp_commit", "the llama.cpp revision that produced the file"),
@@ -168,16 +176,16 @@ def extract_provenance(model: Model) -> dict[str, Any]:
     if datasets:
         prov["datasets"] = datasets
 
+    # Quantized models carry llama-quantize's quantize.imatrix.* keys; the imatrix.* keys of an
+    # imatrix data file are read too, for files that copied those across.
     im = Keys.IMatrix
-    imatrix = {
-        k: v
-        for k, key in {
-            "chunk_count": im.CHUNK_COUNT,
-            "chunk_size": im.CHUNK_SIZE,
-            "datasets": im.DATASETS,
-        }.items()
-        if (v := _kv(model, key)) is not None
+    imatrix_keys = {
+        **QUANTIZE_IMATRIX_KEYS,
+        "chunk_count": im.CHUNK_COUNT,
+        "chunk_size": im.CHUNK_SIZE,
+        "datasets": im.DATASETS,
     }
+    imatrix = {k: v for k, key in imatrix_keys.items() if (v := _kv(model, key)) is not None}
     if imatrix:
         prov["imatrix"] = imatrix
     return prov
@@ -205,8 +213,9 @@ def provenance_gaps(
         gaps.append("general.license")
     if not provenance.get("uuid"):
         gaps.append("general.uuid")
-    if quantized and not (provenance.get("imatrix") or {}).get("datasets"):
-        gaps.append("imatrix.datasets")
+    imatrix = provenance.get("imatrix") or {}
+    if quantized and not (imatrix.get("dataset") or imatrix.get("datasets")):
+        gaps.append("quantize.imatrix.dataset")
     for key in BUILD_INPUT_KEYS:
         if key == "imatrix_sha256" and not quantized:
             continue
