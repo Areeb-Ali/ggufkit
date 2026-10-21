@@ -55,6 +55,20 @@ uv run python scripts/make_readme_assets.py
 `scripts/make_examples.py` regenerates the one synthetic illustration. Paste console output
 verbatim; do not edit numbers by hand.
 
+The animations in `assets/demos/` come from `scripts/make_demos.py`, which runs every command
+shown on screen against the same files and records its output, including a deliberate tamper
+of one tensor that the video labels as such. It needs [cosign](https://github.com/sigstore/cosign)
+(on `PATH` or in `$COSIGN`), ffmpeg, and Node.js with Playwright and a Chromium it can launch.
+It writes the README GIFs and their still frames to `assets/demos/` and 1080x1920 MP4s to
+`build/demos/`:
+
+```sh
+uv run python scripts/make_demos.py
+```
+
+The scenes are in `scripts/demos/scenes.html`; captions there must stay true of the recorded
+output.
+
 ## Style
 
 - ruff's settings in `pyproject.toml` are the style guide; the formatter has the last word.

@@ -19,17 +19,23 @@ It is built on llama.cpp's own [`gguf`](https://pypi.org/project/gguf/) Python p
 every tensor type that package can decode works here too: 26 of them, from `Q4_0` to
 `IQ2_XXS` and `MXFP4`. Sharded models (`-00001-of-00003.gguf`) are handled as one model.
 
-![Per-weight quantization error of blk.0.attn_k.weight in Qwen3-0.6B, Q4_K_M against BF16](https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/hero-error.png)
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/demos/tamper.png">
+  <img src="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/demos/tamper.gif" alt="A demo tamper: 15,706 weights in one tensor of Qwen3-0.6B's Q4_K_M file are changed. sha256 and a cosign signature check only report that the file differs; ggufkit verify names the changed tensor, blk.12.ffn_up.weight, and ggufkit viz error shows the changed block inside it." width="440">
+</picture>
 
-*Where 4-bit quantization loses precision: `ggufkit viz error` on `blk.0.attn_k.weight` of
-Qwen3-0.6B, comparing Unsloth's BF16 and Q4_K_M files. Error follows weight magnitude: bright
-rows are output channels with large weights, whose 4-bit steps are coarser (per-row correlation
-between error and weight magnitude: 0.99).*
+*A tamper made for this demo: in one tensor of Qwen3-0.6B's Q4_K_M file, the scale of 64
+quantization blocks is multiplied by 1.5, which changes 15,706 weights. A hash and a cosign
+signature check both say only that the file differs. `ggufkit verify` names the tensor, and
+`ggufkit viz error` shows the block. Every frame is the recorded output of the commands on
+screen.*
 
 Every example below is real output on
 [unsloth/Qwen3-0.6B-GGUF](https://huggingface.co/unsloth/Qwen3-0.6B-GGUF) (Apache-2.0) at
 revision `50968a4`. [`scripts/make_readme_assets.py`](https://github.com/MysterionRise/ggufkit/blob/main/scripts/make_readme_assets.py) downloads
-the three files, checks their sha256 and reruns every command.
+the three files, checks their sha256 and reruns every command;
+[`scripts/make_demos.py`](https://github.com/MysterionRise/ggufkit/blob/main/scripts/make_demos.py) records the animations from the same
+files.
 
 ## Why
 
@@ -110,6 +116,14 @@ To sign it, `--intoto model.intoto.json` also writes an in-toto statement, and t
 works as a predicate for `cosign attest-blob`. The tested recipe is in
 [docs/MANIFEST.md](https://github.com/MysterionRise/ggufkit/blob/main/docs/MANIFEST.md#signing).
 
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/demos/provenance.png">
+  <img src="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/demos/provenance.gif" alt="ggufkit manifest reports that the Q4_K_M file records 2 of 9 provenance items and lists the 7 missing ones; the manifest is then signed with cosign attest-blob and checked with cosign verify-blob-attestation, which prints Verified OK." width="400">
+</picture>
+
+*What the file records, then the record signed and checked: `ggufkit manifest`, `cosign
+attest-blob` with the manifest as predicate, and `cosign verify-blob-attestation`.*
+
 ### Verify
 
 A copy whose name was changed with llama.cpp's `gguf-new-metadata`, checked against the
@@ -124,6 +138,14 @@ weights      same
 metadata changes:
   ~ general.name
 ```
+
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/demos/signature.png">
+  <img src="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/demos/signature.gif" alt="A copy of the Q4_K_M file with only general.name changed fails a cosign attestation check with no matching subject digest found; ggufkit verify reports metadata-only, weights same, and names general.name as the only change." width="400">
+</picture>
+
+*The same edit against a cosign attestation of the original: cosign rejects the file, as it
+would for any change, and `ggufkit verify` says only the name changed.*
 
 Unsloth's two 4-bit files of the same model, compared directly:
 
@@ -143,6 +165,11 @@ tensor changes:
 
 `kv same`: the two files carry identical metadata, down to `general.file_type`, which says
 `Q4_K_M` in both. Only the tensors tell them apart: 60 of them are stored in a different type.
+
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/demos/label.png">
+  <img src="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/demos/label.gif" alt="ggufkit verify on Unsloth's Q4_K_M and UD-Q4_K_XL files of Qwen3-0.6B: kv same, tensor_info differs, 60 of 310 tensors retyped; ggufkit viz layers then shows the two quantization recipes side by side." width="400">
+</picture>
 
 Verify against a manifest or straight against another file with `--against other.gguf`. The
 verdict is one of `identical`, `metadata-only`, `tensor-info-only`, `metadata-and-tensor-info`
@@ -185,6 +212,12 @@ machine-readable output, and the exit status is 1 when anything differs.
 ggufkit viz error Qwen3-0.6B-BF16.gguf Qwen3-0.6B-Q4_K_M.gguf blk.0.attn_q.weight -o err.png --max-pixels 262144
 ggufkit viz error Qwen3-0.6B-BF16.gguf Qwen3-0.6B-Q4_K_M.gguf 'blk.*.attn_q.weight' --match-glob --shared-scale -o imgs/err.png
 ```
+
+![Per-weight quantization error of blk.0.attn_k.weight in Qwen3-0.6B, Q4_K_M against BF16](https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/hero-error.png)
+
+*`blk.0.attn_k.weight` of Qwen3-0.6B, comparing Unsloth's BF16 and Q4_K_M files. Error follows
+weight magnitude: bright rows are output channels with large weights, whose 4-bit steps are
+coarser (per-row correlation between error and weight magnitude: 0.99).*
 
 <img src="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/error-attn_q.png" alt="Per-weight Q4_K error of blk.0.attn_q.weight in Qwen3-0.6B" width="341">
 
