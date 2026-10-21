@@ -1,9 +1,10 @@
-"""Regenerate the synthetic example images used in the README.
+"""Regenerate the synthetic example image used in the README.
 
     uv run python scripts/make_examples.py
 
-Both images come from small GGUF files built here from seeded random data, not from a real
-model. They illustrate what the commands show; the README says so next to each image.
+The image comes from small GGUF files built here from seeded random data, not from a real
+model. It illustrates a mechanism; the README says so next to it. The real-model images are
+made by scripts/make_readme_assets.py.
 """
 
 from __future__ import annotations
@@ -66,41 +67,7 @@ def main_examples() -> int:
         if rc:
             return rc
 
-        # A Q4_K_M-style mixture: Q4_K body, Q6_K for some attn_v / ffn_down blocks.
-        t: dict[str, tuple[np.ndarray, GGMLQuantizationType]] = {
-            "token_embd.weight": (np.zeros((16, 256), np.float32), Q.Q6_K),
-            "output_norm.weight": (np.ones(256, np.float32), Q.F32),
-        }
-        for b in range(12):
-            t[f"blk.{b}.attn_norm.weight"] = (np.ones(256, np.float32), Q.F32)
-            for role in (
-                "attn_q",
-                "attn_k",
-                "attn_v",
-                "attn_output",
-                "ffn_gate",
-                "ffn_up",
-                "ffn_down",
-            ):
-                hi = (role == "attn_v" and b in (0, 11)) or (role == "ffn_down" and b in (0, 1, 11))
-                t[f"blk.{b}.{role}.weight"] = (
-                    np.zeros((8, 256), np.float32),
-                    Q.Q6_K if hi else Q.Q4_K,
-                )
-            t[f"blk.{b}.ffn_norm.weight"] = (np.ones(256, np.float32), Q.F32)
-        mix = write(d / "synthetic-Q4_K_M.gguf", t)
-        return main(
-            [
-                "viz",
-                "layers",
-                str(mix),
-                "-o",
-                str(ASSETS / "example-layers.png"),
-                "--force",
-                "--title",
-                "synthetic Q4_K_M-style mix",
-            ]
-        )
+        return 0
 
 
 if __name__ == "__main__":
