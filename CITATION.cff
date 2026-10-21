@@ -8,6 +8,7 @@ authors:
   - alias: KerfuffleV2
     name: Kerfuffle
 version: 0.1.0
+date-released: "2026-10-21"
 license: MIT
 repository-code: "https://github.com/MysterionRise/ggufkit"
 keywords:
