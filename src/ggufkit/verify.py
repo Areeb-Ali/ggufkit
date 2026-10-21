@@ -67,14 +67,24 @@ class Report:
     key_changes: list[KeyChange] | None = None
     tensor_changes: list[TensorChange] | None = None
     notes: list[str] = field(default_factory=list)
-    files_ok: bool | None = None
+    #: Raw file hashes against the manifest: None (not asked), "match", "mismatch" or
+    #: "not checked" (the manifest recorded none).
+    files: str | None = None
 
     @property
     def weights_compared(self) -> bool:
         return self.weights_same is not None
 
-    def ok(self, *, allow_metadata: bool = False) -> bool:
-        if self.files_ok is False:
+    def ok(self, *, allow_metadata: bool = False, allow_unverified_weights: bool = False) -> bool:
+        """Whether this counts as a pass.
+
+        Weights that were not compared fail unless the caller asked for that explicitly
+        (``verify --no-data``): a manifest made without weight digests must not let a file
+        with different weights through.
+        """
+        if self.files not in (None, "match"):
+            return False
+        if not self.weights_compared and not allow_unverified_weights:
             return False
         if self.verdict == IDENTICAL:
             return True
@@ -99,7 +109,7 @@ class Report:
             else [
                 {"name": c.name, "kind": c.kind, "detail": c.detail} for c in self.tensor_changes
             ],
-            "files_ok": self.files_ok,
+            "files": self.files,
             "notes": list(self.notes),
         }
 
@@ -214,7 +224,8 @@ def compare(
     if fa.tensors is not None and fb.tensors is not None:
         tensor_changes = _tensor_changes(fa, fb)
 
-    if weights_same is False:
+    renames_only = bool(tensor_changes) and all(c.kind == "renamed" for c in tensor_changes or [])
+    if weights_same is False and not renames_only:
         verdict = WEIGHTS_CHANGED
     elif kv_same and tensor_info_same:
         verdict = IDENTICAL
@@ -227,7 +238,9 @@ def compare(
 
     notes: list[str] = []
     if weights_same is None:
-        notes.append("weights were not compared (no data digest on one side)")
+        notes.append("weights were not compared (no weight digests on one side)")
+    elif weights_same is False and renames_only:
+        notes.append("the same tensor data is stored under new names")
     return Report(
         a=a,
         b=b,
@@ -262,23 +275,27 @@ def verify_against_manifest(
     )
     report = compare(expected, actual, a=manifest_label, b=str(model.path), ignore_keys=ignore_keys)
     if check_files:
-        report.files_ok = True
-        recorded = {f["path"]: f for f in manifest.get("files", [])}
-        for path in model.paths:
-            entry = recorded.get(path.name)
-            if entry is None:
-                report.notes.append(f"{path.name}: not listed in the manifest")
-                report.files_ok = False
-                continue
-            if entry.get("sha256") is None:
-                report.notes.append(
-                    f"{path.name}: manifest has no file hash (made without --file-sha256)"
-                )
-                continue
-            if sha256_file(path) != entry["sha256"]:
-                report.notes.append(f"{path.name}: file sha256 differs from the manifest")
-                report.files_ok = False
+        report.files = _check_files(model, manifest, report.notes)
     return report
+
+
+def _check_files(model: Model, manifest: dict[str, Any], notes: list[str]) -> str:
+    """Compare raw file hashes with the manifest: "match", "mismatch" or "not checked"."""
+    recorded = {f["path"]: f for f in manifest.get("files") or []}
+    status = "match"
+    for path in model.paths:
+        entry = recorded.get(path.name)
+        if entry is None:
+            notes.append(f"{path.name}: not listed in the manifest")
+            status = "mismatch"
+        elif entry.get("sha256") is None:
+            notes.append(f"{path.name}: the manifest has no file hash (made without --file-sha256)")
+            if status == "match":
+                status = "not checked"
+        elif sha256_file(path) != entry["sha256"]:
+            notes.append(f"{path.name}: file sha256 differs from the manifest")
+            status = "mismatch"
+    return status
 
 
 def verify_against_file(
@@ -304,8 +321,8 @@ def format_report(report: Report) -> list[str]:
         f"{'tensor_info':<12} {word(report.tensor_info_same)}",
         f"{'weights':<12} {word(report.weights_same)}",
     ]
-    if report.files_ok is not None:
-        lines.append(f"{'files':<12} {'match' if report.files_ok else 'MISMATCH'}")
+    if report.files is not None:
+        lines.append(f"{'files':<12} {report.files}")
     if report.ignored_keys:
         lines.append(f"{'ignored':<12} {', '.join(report.ignored_keys)}")
     if report.key_changes:
@@ -333,7 +350,8 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
             "Compare a model's fingerprint with a manifest (--manifest) or with another GGUF "
             "file (--against) and report what differs: nothing, metadata only, tensor "
             "descriptors only, or weights. Exit status is 0 when identical (or metadata-only "
-            "with --allow-metadata), 1 on any other difference, 2 on error."
+            "with --allow-metadata), 1 on any other difference or when the weights could not "
+            "be compared, 2 on error."
         ),
     )
     p.add_argument("model", type=Path, help="GGUF file, or any shard of a split model")
@@ -343,7 +361,11 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         "--against", type=Path, metavar="MODEL", help="other GGUF file to compare with"
     )
     p.add_argument("--json", action="store_true", help="print the report as JSON")
-    p.add_argument("--no-data", action="store_true", help="compare metadata and descriptors only")
+    p.add_argument(
+        "--no-data",
+        action="store_true",
+        help="compare metadata and descriptors only, and accept that the weights are unchecked",
+    )
     p.add_argument(
         "--ignore-keys",
         action="append",
@@ -366,6 +388,9 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.file_sha256 and args.manifest is None:
+        msg = "--file-sha256 needs --manifest: there are no recorded file hashes to check"
+        raise ValueError(msg)
     ignore = comma_list(args.ignore_keys)
     jobs = max(1, args.jobs)
     with open_model(args.model) as model:
@@ -394,4 +419,5 @@ def run(args: argparse.Namespace) -> int:
         sys.stdout.write("\n")
     elif not args.quiet:
         print("\n".join(format_report(report)))
-    return 0 if report.ok(allow_metadata=args.allow_metadata) else 1
+    passed = report.ok(allow_metadata=args.allow_metadata, allow_unverified_weights=args.no_data)
+    return 0 if passed else 1

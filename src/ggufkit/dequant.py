@@ -61,7 +61,7 @@ def to_f32(
     if file_endianess == GGUFEndian.BIG:
         msg = (
             f"Tensor {tensor.name!r} is {tensor.tensor_type.name} in a big-endian file; "
-            "convert the file to little-endian first (gguf_convert_endian)"
+            "convert the file to little-endian first (gguf-convert-endian)"
         )
         raise UnsupportedModelError(msg)
     if not can_dequantize(tensor.tensor_type):

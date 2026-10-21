@@ -156,7 +156,10 @@ def fingerprint(
     overall: bytes | None = None
     if data:
         data_digests = _hash_tensor_data(model.tensors, model.endianess, jobs, on_tensor)
-        weights = canon.combine(sorted(data_digests.values()))
+        weights = canon.combine(
+            canon.weight_digest(name, data_digests[name])
+            for name in canon.sorted_by_name(data_digests)
+        )
         overall = canon.overall_digest(kv, tensor_info, weights)
 
     tensors: dict[str, TensorFingerprint] | None = None

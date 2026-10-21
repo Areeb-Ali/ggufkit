@@ -71,6 +71,31 @@ def test_rename_is_tensor_info_only(tmp_path: Path) -> None:
     assert [(c.name, c.kind, c.detail) for c in r.tensor_changes or []] == [
         ("blk.0.attn_q.weight", "renamed", "-> blk.0.attn_q.renamed")
     ]
+    assert r.weights_same is False
+    assert any("new names" in n for n in r.notes)
+
+
+def test_swapped_tensor_data_is_weights_changed(tmp_path: Path) -> None:
+    """Two tensors with the same shape and type trade their data: every name, shape and type
+    is unchanged, and so is the multiset of tensor bytes, but the model is not the same."""
+    tensors = tiny_tensors()
+    tensors["blk.0.attn_norm.weight"], tensors["output_norm.weight"] = (
+        tensors["output_norm.weight"],
+        tensors["blk.0.attn_norm.weight"],
+    )
+    a, b = variant(tmp_path, "a"), variant(tmp_path, "b", tensors=tensors)
+    fa, fb = fingerprint_of(a), fingerprint_of(b)
+    assert fa.kv == fb.kv
+    assert fa.tensor_info == fb.tensor_info
+    assert fa.weights != fb.weights
+    assert fa.overall != fb.overall
+    r = compare(fa, fb)
+    assert r.verdict == WEIGHTS_CHANGED
+    assert not r.ok()
+    assert {(c.name, c.kind) for c in r.tensor_changes or []} == {
+        ("blk.0.attn_norm.weight", "data"),
+        ("output_norm.weight", "data"),
+    }
 
 
 def test_added_and_removed_tensors(tmp_path: Path) -> None:
@@ -122,6 +147,8 @@ def test_no_data_compare_notes_it(tmp_path: Path) -> None:
     assert r.verdict == IDENTICAL
     assert not r.weights_compared
     assert r.notes
+    assert not r.ok()
+    assert r.ok(allow_unverified_weights=True)
 
 
 def test_ignore_keys_needs_per_kv(tmp_path: Path) -> None:
@@ -147,15 +174,26 @@ def test_verify_against_manifest(tmp_path: Path) -> None:
         manifest = build_manifest(model, file_sha256=True)
         r = verify_against_manifest(model, manifest, check_files=True)
     assert r.verdict == IDENTICAL
-    assert r.files_ok is True
+    assert r.files == "match"
     assert r.ok()
 
     flip_first_byte_of_tensor(a, "token_embd.weight")
     with open_model(a) as model:
         r = verify_against_manifest(model, manifest, check_files=True)
     assert r.verdict == WEIGHTS_CHANGED
-    assert r.files_ok is False
+    assert r.files == "mismatch"
     assert any("sha256 differs" in n for n in r.notes)
+
+
+def test_file_hashes_missing_from_manifest_are_not_a_pass(tmp_path: Path) -> None:
+    a = variant(tmp_path, "a")
+    with open_model(a) as model:
+        manifest = build_manifest(model)
+        r = verify_against_manifest(model, manifest, check_files=True)
+    assert r.verdict == IDENTICAL
+    assert r.files == "not checked"
+    assert not r.ok()
+    assert any("no file hash" in n for n in r.notes)
 
 
 def test_verify_against_no_data_manifest_skips_weights(tmp_path: Path) -> None:
@@ -167,6 +205,13 @@ def test_verify_against_no_data_manifest_skips_weights(tmp_path: Path) -> None:
         r = verify_against_manifest(model, manifest)
     assert r.verdict == IDENTICAL
     assert not r.weights_compared
+    assert not r.ok(), "unchecked weights must not pass"
+    assert r.ok(allow_unverified_weights=True)
+
+    manifest_path = tmp_path / "a.manifest.json"
+    save_manifest(manifest_path, manifest)
+    assert main(["verify", str(a), "--manifest", str(manifest_path), "-q"]) == 1
+    assert main(["verify", str(a), "--manifest", str(manifest_path), "--no-data", "-q"]) == 0
 
 
 def test_verify_cli_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -190,3 +235,4 @@ def test_verify_cli_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str
     assert report["sections"] == {"kv": True, "tensor_info": True, "weights": True}
     assert main(["verify", str(b), "--manifest", str(manifest_path), "-q"]) == 1
     assert main(["verify", str(a), "--manifest", str(tmp_path / "nope.json"), "-q"]) == 2
+    assert main(["verify", str(a), "--against", str(b), "--file-sha256", "-q"]) == 2

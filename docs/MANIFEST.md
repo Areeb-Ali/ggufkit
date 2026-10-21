@@ -1,7 +1,9 @@
 # ggufkit-manifest/1: provenance records for GGUF models
 
-Status: draft, implemented by `ggufkit.manifest`. Readers must check `schema` and refuse
-versions they do not know.
+Status: stable since ggufkit 0.1.0, implemented by `ggufkit.manifest`. Readers must check
+`schema` and refuse versions they do not know. Within `ggufkit-manifest/1`, later releases
+only add optional fields; removing or renaming a field, or changing its meaning, needs a new
+schema id.
 
 ## Why
 
@@ -69,14 +71,28 @@ ggufkit verify model.gguf --against other.gguf                       # two files
 |---|---|
 | `identical` | metadata, tensor descriptors and weights all match |
 | `metadata-only` | only metadata differs; the report lists the keys |
-| `tensor-info-only` | only tensor descriptors differ (renamed or retyped in place, same bytes) |
+| `tensor-info-only` | only tensor descriptors differ: renamed, retyped or reshaped in place, every tensor's bytes unchanged |
 | `metadata-and-tensor-info` | both of the above, weights untouched |
-| `weights-changed` | the bytes of at least one tensor differ, or tensors were added or removed |
+| `weights-changed` | the bytes of at least one tensor differ, bytes moved between tensors, or tensors were added or removed |
 
-Exit status: `0` for `identical` (and for `metadata-only` with `--allow-metadata`), `1` for any
-other verdict or a raw file hash mismatch, `2` for errors. `--ignore-keys 'general.name,tokenizer.chat_template'`
-excludes keys you expect to change. A manifest made with `--no-data` carries no weights digest,
-so verification against it says `weights: not compared`.
+A rename counts as `tensor-info-only` only when the per-tensor digests show the same bytes
+under the new name; without per-tensor digests (`--no-per-tensor`) any change in `weights`
+is reported as `weights-changed`.
+
+Exit status:
+
+- `0` for `identical`, and for `metadata-only` with `--allow-metadata`;
+- `1` for any other verdict, for a raw file hash that differs or was not recorded, and when
+  the weights could not be compared;
+- `2` for errors.
+
+`--ignore-keys 'general.name,tokenizer.chat_template'` excludes keys you expect to change.
+
+A manifest made with `manifest --no-data` carries no weight digests. Checking a file against
+it reports `weights  not compared` and **fails**, so a script that trusts the exit status
+cannot be handed a file whose weights nobody checked. Pass `verify --no-data` to ask for a
+metadata-and-descriptors check on purpose. Likewise, `--file-sha256` against a manifest made
+without `--file-sha256` reports `files  not checked` and fails.
 
 ## Signing
 
@@ -88,6 +104,9 @@ tools in the shape they expect.
 next to the manifest: one `subject` per file, identified by its raw sha256, `predicateType`
 `https://github.com/MysterionRise/ggufkit/manifest/v1`, and the manifest as `predicate`. It
 implies `--file-sha256`.
+
+The predicate type is an identifier, not a web page: it does not need to resolve, and it
+will not change for `ggufkit-manifest/1`, so attestations made today stay verifiable.
 
 ```sh
 ggufkit manifest model.gguf --intoto model.intoto.json
