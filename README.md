@@ -37,8 +37,8 @@ Model signing ([OpenSSF model-signing](https://github.com/sigstore/model-transpa
 Sigstore) protects the bytes you were given. It breaks the moment someone fixes a chat
 template in the metadata, and when it breaks it cannot tell you whether the weights changed.
 It also says nothing about whether a community quantization was faithfully built from the
-model it names: a 2026 study of the most-downloaded GGUF repositories on Hugging Face found
-that none record enough build inputs to reproduce the quantization, and
+model it names. GGUF's standard metadata has no key for the source checksum, the llama.cpp
+version or the quantize command, so files do not say how to rebuild them, and
 [Mind the Gap](https://arxiv.org/abs/2505.23786) (ICML 2025) showed weights that behave
 well in full precision and badly after GGUF quantization.
 
@@ -264,7 +264,6 @@ file, and `ggufkit diff --numeric` tells you how far apart the two are when you 
 ## Roadmap
 
 - A gallery of error maps and quant maps for popular open models, built from the real files.
-- in-toto statements from manifests, for signing with `cosign` or `model_signing`.
 - A one-shot "reproduce this quant" check that drives `llama-quantize` from a manifest.
 
 ## Development

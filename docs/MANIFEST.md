@@ -5,10 +5,11 @@ versions they do not know.
 
 ## Why
 
-A 2026 study of the most-downloaded GGUF repositories on Hugging Face found that none record
-enough to reproduce how the file was quantized. A manifest is the record that is missing: what
-the file *is* (its fingerprint), what its metadata *claims* (origin, licence, who quantized
-it), what the producer *declares* (build inputs), and an honest list of what is absent.
+GGUF's standard metadata has no key for the source model's checksum, the llama.cpp version or
+the quantize command, so a file cannot say how to reproduce it. A manifest is the record that
+is missing: what the file *is* (its fingerprint), what its metadata *claims* (origin, licence,
+who quantized it), what the producer *declares* (build inputs), and an honest list of what is
+absent.
 
 ```sh
 ggufkit manifest model-Q4_K_M.gguf \
