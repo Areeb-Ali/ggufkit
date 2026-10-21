@@ -190,6 +190,7 @@ const mark = (s) => s.replace(/\[(r|g|a|c)\](.*?)\[\/\1\]/g, '<span class="$1">$
 const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 
 let items = [];
+let cues = [];
 let duration = 0;
 
 function fade(el, t, start, end, { inDur = .28, outDur = .22, rise = 24 } = {}) {
@@ -219,7 +220,15 @@ function colorize(line) {
 
 /* ---- timeline primitives ---- */
 
+/* Captions for the SRT file: what the viewer can read on screen, as plain text. */
+function cue(start, end, html, rank = 0) {
+  const tmp = document.createElement("div");
+  tmp.innerHTML = mark(html).replace(/<br\s*\/?>/g, "\n").replace(/<span class="sub">/g, "\n<span>");
+  cues.push({ start, end, rank, text: tmp.textContent.replace(/[ \t]+/g, " ").trim() });
+}
+
 function caption(start, end, html, opts = {}) {
+  cue(start, end, html);
   const el = document.createElement("div");
   el.className = "cap" + (opts.small ? " small" : "");
   el.innerHTML = `<div>${mark(html)}</div>`;
@@ -228,6 +237,7 @@ function caption(start, end, html, opts = {}) {
 }
 
 function badge(start, end, html, kind) {
+  cue(start, end, html, 1);
   const el = document.createElement("div");
   el.className = `badge ${kind}`;
   el.innerHTML = html;
@@ -313,6 +323,7 @@ function panel(cls) {
 }
 
 function endCard(start, html, note) {
+  cue(start, Infinity, note ? `${html}<br>${note}` : html);
   const el = $("#end");
   el.innerHTML = `<h1>${mark(html)}</h1>${$("#footer .mark").outerHTML}${note ? `<p>${note}</p>` : ""}`;
   items.push((t) => {
@@ -344,6 +355,7 @@ const SCENES = {
     const f = d.facts;
     const [sha, cosign, verify, viz] = d.steps;
     $("#demo-chip").style.display = "block";
+    cue(0, 3.4, "(Demo tamper, made for this video.)", 2);
     const n = f.changed_weights.toLocaleString("en-US");
     const total = Math.round(f.total_weights / 1e6);
     caption(0, 3.4, `I changed [r]${n} weights[/r]<br>in a ${total}M-parameter model.<span class="sub">Can you find them?</span>`, { first: true, small: true });
@@ -462,11 +474,29 @@ const SCENES = {
 window.setup = (name, demo, format) => {
   document.body.className = `fmt-${format}`;
   items = [];
+  cues = [];
   const meta = SCENES[name](demo);
   duration = meta.duration;
   items.push((t) => { $("#progress i").style.width = `${100 * clamp(t / duration)}%`; });
   items.push(scrollTerm);
   return meta;
+};
+
+/* On-screen text as non-overlapping cues: split at every start and end, join what is showing. */
+window.captions = () => {
+  const list = cues.map((c) => ({ ...c, end: Math.min(c.end, duration) })).filter((c) => c.end > c.start);
+  const cuts = [...new Set(list.flatMap((c) => [c.start, c.end]))].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const [a, b] = [cuts[i], cuts[i + 1]];
+    const text = list.filter((c) => c.start <= a && c.end >= b)
+      .sort((x, y) => x.rank - y.rank).map((c) => c.text).join("\n");
+    const last = out[out.length - 1];
+    if (!text) continue;
+    if (last && last.text === text && last.end === a) last.end = b;
+    else out.push({ start: a, end: b, text });
+  }
+  return out;
 };
 
 window.ready = () => Promise.all([document.fonts.ready, ...[...document.images].map((i) => i.decode())]);

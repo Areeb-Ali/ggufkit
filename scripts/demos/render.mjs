@@ -1,13 +1,15 @@
 // Render the demos recorded by scripts/make_demos.py into videos, GIFs and posters.
 //
-//   node scripts/demos/render.mjs DEMOS_JSON [NAME ...] [--formats=vertical,readme] [--keep-frames]
+//   node scripts/demos/render.mjs DEMOS_JSON [NAME ...] [--formats=vertical,feed,readme] [--keep-frames]
 //
-// Each demo is rendered twice from scenes.html:
-//   vertical  1080x1920, 30 fps -> build/demos/NAME.mp4 and build/demos/NAME-cover.png
-//   readme    800x1000,  15 fps -> assets/demos/NAME.gif and assets/demos/NAME.png
+// Formats, from scenes.html (vertical and readme unless --formats says otherwise):
+//   vertical  1080x1920, 30 fps -> build/demos/NAME.mp4 and NAME-cover.png
+//   feed      1080x1350, 30 fps -> build/demos/NAME-feed.mp4 and NAME-feed-cover.png (4:5)
+//   readme     800x1000, 15 fps -> assets/demos/NAME.gif and assets/demos/NAME.png
+// Every MP4 also gets build/demos/NAME.srt with the on-screen text as captions.
 // Needs Playwright (with a Chromium it can launch) and ffmpeg on PATH.
 
-import { mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -19,10 +21,13 @@ const { chromium } = createRequire(import.meta.url)("playwright");
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..", "..");
 const SCENES = pathToFileURL(join(HERE, "scenes.html")).href;
+// layout: the scenes.html layout to use; out: what to encode the frames into.
 const FORMATS = {
-  vertical: { width: 1080, height: 1920, scale: 1, fps: 30 },
-  readme: { width: 1080, height: 1350, scale: 800 / 1080, fps: 15 },
+  vertical: { width: 1080, height: 1920, scale: 1, fps: 30, layout: "vertical", out: "mp4", suffix: "" },
+  feed: { width: 1080, height: 1350, scale: 1, fps: 30, layout: "readme", out: "mp4", suffix: "-feed" },
+  readme: { width: 1080, height: 1350, scale: 800 / 1080, fps: 15, layout: "readme", out: "gif", suffix: "" },
 };
+const DEFAULT_FORMATS = ["vertical", "readme"];
 
 const args = process.argv.slice(2);
 const flags = new Set(args.filter((a) => a.startsWith("--") && !a.includes("=")));
@@ -30,12 +35,17 @@ const formatArg = args.find((a) => a.startsWith("--formats="));
 const positional = args.filter((a) => !a.startsWith("--"));
 const [dataPath, ...only] = positional;
 if (!dataPath) {
-  console.error("usage: node render.mjs DEMOS_JSON [NAME ...] [--formats=vertical,readme]");
+  console.error("usage: node render.mjs DEMOS_JSON [NAME ...] [--formats=vertical,feed,readme]");
   process.exit(2);
 }
 const data = JSON.parse(readFileSync(dataPath, "utf8"));
 const names = only.length ? only : Object.keys(data);
-const formats = formatArg ? formatArg.split("=")[1].split(",") : Object.keys(FORMATS);
+const formats = formatArg ? formatArg.split("=")[1].split(",") : DEFAULT_FORMATS;
+const unknown = formats.filter((f) => !(f in FORMATS));
+if (unknown.length) {
+  console.error(`unknown format(s): ${unknown.join(", ")}`);
+  process.exit(2);
+}
 
 function ffmpeg(...argv) {
   const r = spawnSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...argv], { stdio: "inherit" });
@@ -43,6 +53,16 @@ function ffmpeg(...argv) {
 }
 
 const mb = (path) => (statSync(path).size / 1e6).toFixed(2);
+
+function srtTime(seconds) {
+  const ms = Math.round(seconds * 1000);
+  const pad = (n, w = 2) => String(n).padStart(w, "0");
+  return `${pad(Math.floor(ms / 3600000))}:${pad(Math.floor(ms / 60000) % 60)}:${pad(Math.floor(ms / 1000) % 60)},${pad(ms % 1000, 3)}`;
+}
+
+function srt(cues) {
+  return cues.map((c, i) => `${i + 1}\n${srtTime(c.start)} --> ${srtTime(c.end)}\n${c.text}\n`).join("\n");
+}
 
 const browser = await chromium.launch();
 try {
@@ -55,7 +75,7 @@ try {
     for (const name of names) {
       const page = await context.newPage();
       await page.goto(SCENES);
-      const meta = await page.evaluate(([n, d, fmt]) => window.setup(n, d, fmt), [name, data[name], format]);
+      const meta = await page.evaluate(([n, d, l]) => window.setup(n, d, l), [name, data[name], f.layout]);
       await page.evaluate(() => window.ready());
 
       const frames = join(ROOT, "build", "demos", "frames", `${name}-${format}`);
@@ -68,10 +88,12 @@ try {
       }
       await page.evaluate((t) => window.renderAt(t), meta.poster);
 
-      if (format === "vertical") {
+      if (f.out === "mp4") {
         const out = join(ROOT, "build", "demos");
-        await page.screenshot({ path: join(out, `${name}-cover.png`) });
-        const mp4 = join(out, `${name}.mp4`);
+        await page.screenshot({ path: join(out, `${name}${f.suffix}-cover.png`) });
+        const captions = join(out, `${name}.srt`);
+        writeFileSync(captions, srt(await page.evaluate(() => window.captions())));
+        const mp4 = join(out, `${name}${f.suffix}.mp4`);
         ffmpeg(
           "-framerate", String(f.fps), "-i", join(frames, "%05d.png"),
           "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",

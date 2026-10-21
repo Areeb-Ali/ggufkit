@@ -67,7 +67,12 @@ uv run python scripts/make_demos.py
 ```
 
 The scenes are in `scripts/demos/scenes.html`; captions there must stay true of the recorded
-output.
+output. To re-render without re-running the commands, call the renderer on the recorded data;
+`--formats=feed` adds a 4:5 (1080x1350) MP4, and every MP4 gets an `.srt` of its on-screen text:
+
+```sh
+node scripts/demos/render.mjs scratch/demos/demos.json tamper --formats=feed
+```
 
 ## Style
 
