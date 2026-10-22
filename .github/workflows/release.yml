@@ -63,7 +63,10 @@ jobs:
       - name: Record build provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: dist/*
+          # Not dist/*: uv build also writes dist/.gitignore, which would be attested too.
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: dist
