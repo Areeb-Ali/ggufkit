@@ -1,40 +1,81 @@
 name: Release
 
-# Publishes to PyPI when a version tag is pushed, using PyPI trusted publishing
-# (no API token stored in the repository). One-time setup on pypi.org:
-# add a trusted publisher for project "ggufkit", owner "MysterionRise",
-# repository "ggufkit", workflow "release.yml", environment "pypi".
+# A v* tag publishes to PyPI. Running this workflow by hand (Actions > Release > Run
+# workflow) is a dry run: it does everything up to the upload, then stops.
+#
+# One-time setup on pypi.org: a trusted publisher for project "ggufkit", owner
+# "MysterionRise", repository "ggufkit", workflow "release.yml", environment "pypi".
+# No API token is stored anywhere. See docs/RELEASING.md.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   build:
+    name: build, check, attest
+    needs: ci
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.12"
-      - name: Check the tag matches the package version
+          python-version: "3.13"
+      - name: Check the tag matches the version and is on main
+        if: github.ref_type == 'tag'
         run: |
           version=$(uv run --no-project python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          test "v${version}" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} does not match version ${version}"; exit 1; }
-      - run: uv sync --all-extras --locked
-      - run: uv run pytest -q
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match version ${version} in pyproject.toml"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::${GITHUB_REF_NAME} points at a commit that is not on main"
+            exit 1
+          fi
       - run: uv build
+      - name: Check the distributions
+        run: uvx twine check --strict dist/*
+      - name: Install each distribution in a clean environment and use it
+        run: |
+          for dist in dist/*.whl dist/*.tar.gz; do
+            rm -rf /tmp/smoke
+            uv venv --quiet /tmp/smoke
+            uv pip install --quiet --python /tmp/smoke/bin/python "$dist" pillow
+            /tmp/smoke/bin/python scripts/smoke_test.py
+          done
+      - name: Record build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
 
   publish:
+    name: publish to PyPI
+    if: github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment:
       name: pypi
       url: https://pypi.org/project/ggufkit/
@@ -46,3 +87,39 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true
+
+  github-release:
+    name: GitHub release
+    if: github.ref_type == 'tag'
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Take the release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" 'index($0, "## [" v "]") == 1 {on = 1; next} /^## \[/ {on = 0} on' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for ${version}"
+            exit 1
+          fi
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "ggufkit ${GITHUB_REF_NAME#v}" \
+            --notes-file notes.md \
+            --verify-tag

@@ -1,8 +1,9 @@
 # ggufkit
 
 [![CI](https://github.com/MysterionRise/ggufkit/actions/workflows/ci.yml/badge.svg)](https://github.com/MysterionRise/ggufkit/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/ggufkit.svg)](https://pypi.org/project/ggufkit/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/MysterionRise/ggufkit/blob/main/LICENSE)
-![Python 3.10 to 3.13](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)
+![Python 3.11 to 3.14](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg)
 
 Fingerprint, verify and visualize [GGUF](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md) models.
 
@@ -16,8 +17,8 @@ Fingerprint, verify and visualize [GGUF](https://github.com/ggml-org/ggml/blob/m
 - What does `blk.17.attn_q.weight` actually look like?
 
 It is built on llama.cpp's own [`gguf`](https://pypi.org/project/gguf/) Python package, so
-every tensor type that package can decode works here too: 26 of them, from `Q4_0` to
-`IQ2_XXS` and `MXFP4`. Sharded models (`-00001-of-00003.gguf`) are handled as one model.
+every tensor type that package can decode works here too: 31 of them, from `F32` and `Q4_0`
+to `IQ2_XXS`, `MXFP4` and `NVFP4`. Sharded models (`-00001-of-00003.gguf`) are handled as one model.
 
 <picture>
   <source media="(prefers-reduced-motion: reduce)" srcset="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/demos/tamper.png">
@@ -56,12 +57,12 @@ against the other.
 ## Install
 
 ```sh
-pip install 'ggufkit[viz] @ git+https://github.com/MysterionRise/ggufkit'   # until the first PyPI release
-uv tool install 'ggufkit[viz] @ git+https://github.com/MysterionRise/ggufkit'
+pip install "ggufkit[viz]"
+uv tool install "ggufkit[viz]"     # or: pipx install "ggufkit[viz]"
 ```
 
 The `viz` extra pulls in Pillow for image rendering; the core needs only `gguf` and `numpy`.
-Python 3.10 or newer.
+Python 3.11 or newer. `python -m ggufkit` works as well as `ggufkit`.
 
 ## Quick start
 
@@ -71,8 +72,8 @@ Python 3.10 or newer.
 $ ggufkit fingerprint Qwen3-0.6B-Q4_K_M.gguf --no-per-tensor
 kv           8eb7cd5593931521f2e20641dcb340cf5e9e32a6cafd9b5face98332e53052d9
 tensor_info  fb9deeab22c4fb9d0b1cca92f9edb974c1f21c53b1a986cd96144d665f0c65be
-weights      b69d967169c1d061f65f21e5208091993f949bb274a91c1cacf9f1318fdb6c6c
-overall      9aa16655466361e4dfa7dc91181db38229f51914038c7de77c5fe4b3dfd7a8a9
+weights      7e8be1d0cc3ac473b493058a2976be592d51125772c39e80ab6264215b756de5
+overall      155c4d32bd17c6a005e44269e96cf3f0a2b315ca1eb3bc434349aa268b3f975a
 spec         ggufkit-fp/1  (32 metadata entries, 310 tensors)
 ```
 
@@ -82,14 +83,18 @@ Three digests, three answers:
 |---|---|---|---|
 | same | same | same | the same model |
 | differs | same | same | only metadata changed (names, templates, licence text) |
-| same | differs | same | tensors renamed or retyped in place, bytes untouched |
-| any | any | differs | tensor bytes changed, or tensors were added or removed |
+| same | differs | same | tensors retyped or reshaped in place, bytes untouched |
+| any | any | differs | tensor bytes changed or moved between tensors, tensors were added or removed, or renamed |
+
+`weights` binds every tensor's bytes to its name, so swapping the data of two tensors with the
+same shape shows up even though no byte was added or lost. `verify` tells a pure rename apart
+from new weights through the per-tensor digests.
 
 Without `--no-per-tensor` you also get one line per tensor. `--json` prints JSON, `--no-data`
 skips tensor bytes (instant on any size), `--per-kv` adds a digest per metadata entry, `-j 8`
 hashes on eight threads. Pass any shard of a split model and
 the whole model is fingerprinted; splitting, merging or editing metadata with llama.cpp's
-`gguf_new_metadata` leaves `weights` unchanged.
+`gguf-new-metadata` leaves `weights` unchanged.
 
 ### Record provenance
 
@@ -97,7 +102,7 @@ the whole model is fingerprinted; splitting, merging or editing metadata with ll
 $ ggufkit manifest Qwen3-0.6B-Q4_K_M.gguf --file-sha256
 manifest     Qwen3-0.6B-Q4_K_M.manifest.json
 model        qwen3 Q4_K_M, 310 tensors, 596.05M parameters, 372.65 MiB
-fingerprint  9aa16655466361e4dfa7dc91181db38229f51914038c7de77c5fe4b3dfd7a8a9
+fingerprint  155c4d32bd17c6a005e44269e96cf3f0a2b315ca1eb3bc434349aa268b3f975a
 provenance   imatrix, quantized_by, repo_url
 score        2/9 of what a verifiable file records
 gaps         general.source.*, general.license, general.uuid, build_inputs.source_sha256, build_inputs.imatrix_sha256, build_inputs.llama_cpp_commit, build_inputs.quantize_cmd
@@ -145,7 +150,9 @@ metadata changes:
 </picture>
 
 *The same edit against a cosign attestation of the original: cosign rejects the file, as it
-would for any change, and `ggufkit verify` says only the name changed.*
+would for any change, and `ggufkit verify` says only the name changed. (The demos run
+offline, so cosign is told to skip Sigstore's public transparency log; in real use, leave it
+on.)*
 
 Unsloth's two 4-bit files of the same model, compared directly:
 
@@ -278,21 +285,71 @@ ggufkit viz tensor model.gguf token_embd.weight -o embd.png --max-pixels 4000000
 ```
 
 Each pixel is one weight: brightness follows magnitude, hue says whether the weight sits
-well below the mean, well above it, or in between. A slice of an `attn_q` tensor from a 3B
-model:
+well below the mean, well above it, or in between.
 
-![attn_q tensor rendered as an image](https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/attn_q_snippet.png)
+<img src="https://raw.githubusercontent.com/MysterionRise/ggufkit/main/assets/tensor-attn_q.png" alt="blk.0.attn_q.weight of Qwen3-0.6B in BF16, rendered as an image" width="341">
+
+*`blk.0.attn_q.weight` of Qwen3-0.6B in BF16, mean-pooled to 341×682 pixels with
+`--max-pixels 262144`. The brighter patch a quarter of the way down is the group of larger
+weights that shows more quantization error in the `attn_q` error map above.*
 
 PyTorch checkpoints work too when `torch` is installed (`--model-type torch`).
 
 ## What this proves, and what it does not
 
-A fingerprint proves integrity and equivalence: that two files hold the same metadata,
-descriptors and weights, or exactly which part differs. A manifest records claims and makes
-their absence visible. Neither proves that a quantized file was faithfully derived from the
-model it names, or that a model is benign. For that, re-quantize the source with the recorded
-build inputs and compare: `ggufkit verify --against` tells you whether you reproduced the
-file, and `ggufkit diff --numeric` tells you how far apart the two are when you did not.
+- **A fingerprint proves integrity and equivalence:** two files hold the same metadata,
+  tensor descriptors and weights, or exactly which part differs. Each tensor's bytes are
+  bound to its name, so moving weights between tensors counts as a change.
+- **A manifest records claims** (where the model came from, who quantized it, how) and makes
+  missing ones visible. It is only as trustworthy as the place you got it from: whoever can
+  replace a model can replace a manifest stored next to it. Sign manifests (`--intoto` and
+  cosign, see [docs/MANIFEST.md](https://github.com/MysterionRise/ggufkit/blob/main/docs/MANIFEST.md#signing)) or fetch them from a source
+  you trust more than the download, and check the signature before trusting the verdict.
+- **A passing `verify` always means the weights were compared.** Against a manifest made with
+  `--no-data`, `verify` fails unless you ask for a metadata-only check with `verify --no-data`.
+- **Neither proves that a quantized file was faithfully built from the model it names, or that
+  a model is benign.** For that, re-quantize the source with the recorded build inputs and
+  compare: `verify --against` tells you whether you reproduced the file, and
+  `diff --numeric` tells you how far apart the two are when you did not.
+
+## Exit codes
+
+| command | 0 | 1 | 2 |
+|---|---|---|---|
+| `verify` | identical (or metadata-only with `--allow-metadata`) | any other difference; weights or file hashes that could not be compared | error |
+| `diff` | nothing differs in the compared sections | something differs | error |
+| `fingerprint`, `manifest`, `stitch`, `viz` | done | | error |
+
+Errors are a malformed or unreadable file, a malformed manifest, an output file that exists
+without `--force`, or invalid arguments; they print one line starting with `error:`. Ctrl-C
+exits 130, and a closed output pipe 141.
+
+## FAQ
+
+**How is this different from `sha256sum` or the hashes Hugging Face shows?** Those hash bytes.
+Any change, even fixing one character of a chat template, gives a new hash and no
+explanation. A ggufkit fingerprint stays the same under changes that leave the model alone
+(metadata order, sharding, alignment, tensor order) and says which part changed when
+something did. Keep checking file hashes on download; use the fingerprint to ask whether it
+is still the same model.
+
+**And OpenSSF model-signing or Sigstore?** They prove who published which bytes, and ggufkit
+does not replace them. It writes the manifest you sign (an in-toto statement, or a cosign
+predicate), and when a signature check fails, it tells you what changed. The signature demo
+above shows both side by side.
+
+**Does a matching fingerprint mean a model is safe?** No. It means the model is the same as
+the one you compared it with. Whether that one is benign is a separate question.
+
+**Will fingerprints change in a later release?** No. A file's `ggufkit-fp/1` digests stay the
+same; a change to what is hashed gets a new spec id, and ggufkit keeps verifying the old one.
+Manifests (`ggufkit-manifest/1`) only gain optional fields. See
+[docs/FINGERPRINT.md](https://github.com/MysterionRise/ggufkit/blob/main/docs/FINGERPRINT.md) and [docs/MANIFEST.md](https://github.com/MysterionRise/ggufkit/blob/main/docs/MANIFEST.md).
+
+**Can I use it from Python?** The modules (`ggufkit.fingerprint`, `ggufkit.verify`,
+`ggufkit.manifest`, …) can be imported, but the Python API is provisional in 0.x and may
+change between minor releases. What 0.x keeps stable is the command line, its exit codes, and
+the fingerprint and manifest formats.
 
 ## Roadmap
 
@@ -309,8 +366,9 @@ uv run mypy
 ```
 
 Tests build tiny GGUF files in-process; nothing is downloaded. `pytest --update-golden`
-rewrites the golden fingerprint after a deliberate spec change (bump the spec id too).
-Releases are published to PyPI by pushing a `vX.Y.Z` tag that matches `pyproject.toml`.
+rewrites the golden fingerprints after a deliberate spec change (bump the spec id too).
+Releases are published to PyPI from a `vX.Y.Z` tag by `.github/workflows/release.yml`, with
+build provenance and PyPI attestations; see [docs/RELEASING.md](https://github.com/MysterionRise/ggufkit/blob/main/docs/RELEASING.md).
 
 ## Origins
 

@@ -168,7 +168,7 @@ def test_cli(trio, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert not list(tmp_path.glob("*.g.png"))
     assert (
         main(["viz", "error", str(src), str(q4), "missing", "-o", str(tmp_path / "x.png"), "-q"])
-        == 1
+        == 2
     )
     assert (
         main(

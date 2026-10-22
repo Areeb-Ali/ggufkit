@@ -360,7 +360,9 @@ def run(args: argparse.Namespace) -> int:
     try:
         cell_w, cell_h = (int(v) for v in str(args.cell).lower().split("x", 1))
     except ValueError:
-        print("error: --cell expects WxH, for example 18x12", file=sys.stderr)
+        cell_w = cell_h = 0
+    if cell_w < 1 or cell_h < 1:
+        print("error: --cell expects WxH in pixels, for example 18x12", file=sys.stderr)
         return 2
     if args.title and len(args.title) != len(args.model):
         print("error: give one --title per model, or none", file=sys.stderr)

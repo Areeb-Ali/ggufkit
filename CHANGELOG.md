@@ -4,20 +4,23 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
-## [0.1.0] - 2026-10-21
+## [0.1.0] - Unreleased
 
-First release.
+First release. Supports Python 3.11 to 3.14.
 
 ### Added
 
 - `ggufkit fingerprint`: order-independent content fingerprint (`ggufkit-fp/1`, see
   `docs/FINGERPRINT.md`) with separate digests for metadata, tensor descriptors and weights.
   Invariant to metadata and tensor order, offsets, alignment, sharding and, for element types,
-  byte order.
+  byte order. `weights` binds each tensor's bytes to its name, so data moved between tensors
+  is a change.
 - `ggufkit manifest`: provenance record (`ggufkit-manifest/1`, see `docs/MANIFEST.md`) with the
   fingerprint, file hashes, metadata claims, user-supplied build inputs and a provenance gap list.
 - `ggufkit verify`: compare a model with a manifest or another file and get a one-word verdict
-  with a meaningful exit status.
+  with a meaningful exit status. It passes only when the weights were actually compared (or
+  `--no-data` asks for a metadata-only check), and `--file-sha256` passes only when the
+  manifest recorded file hashes.
 - `ggufkit diff`: metadata value diff, tensor diff and `--numeric` per-tensor error statistics.
 - `ggufkit stitch`: combine the metadata of one file with the tensors of another, or write a
   vocab-only file.
@@ -35,8 +38,19 @@ First release.
   revision with sha256 checks. `scripts/make_examples.py` keeps one synthetic illustration.
 - `ggufkit manifest --intoto FILE`: an in-toto Statement v1 for signing; `docs/MANIFEST.md`
   has a cosign recipe tested on a real model.
+- Malformed and hostile files fail fast with one `error:` line and exit status 2: a header
+  check rejects declared sizes that cannot fit in the file before gguf-py parses it. Output
+  files are written atomically, and existing ones are only replaced with `--force`.
+- `python -m ggufkit`, and type information for the package (`py.typed`).
+- README demo animations (`scripts/make_demos.py`, `scripts/demos/`), recorded from real
+  commands on the same files, with 1080x1920 and 4:5 MP4 renders and SRT captions for posting
+  elsewhere.
+- Releases are built once, smoke-tested from a clean install, attested (build provenance and
+  PyPI attestations) and published by `.github/workflows/release.yml`.
 
 ### Origins
 
 Builds on [KerfuffleV2/gguf-tools](https://github.com/KerfuffleV2/gguf-tools) (MIT, 2023):
 `gguf-checksum`, `gguf-frankenstein` and `gguf-tensor-to-image`, whose history is preserved.
+
+[0.1.0]: https://github.com/MysterionRise/ggufkit/releases/tag/v0.1.0

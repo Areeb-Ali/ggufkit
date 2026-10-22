@@ -13,7 +13,9 @@ in between. Attention projections in particular have a lot going on.
 from __future__ import annotations
 
 import fnmatch
+import pickle
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -25,6 +27,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
+from ggufkit._util import non_negative_int, positive_float, positive_int, to_stderr
+from ggufkit.canon import UnsupportedModelError
 from ggufkit.dequant import can_dequantize, to_f32
 from ggufkit.model import open_model
 
@@ -101,9 +105,13 @@ class TorchSource:
             import torch
         except ImportError as e:
             msg = "Loading PyTorch checkpoints requires torch: pip install torch"
-            raise RuntimeError(msg) from e
+            raise UnsupportedModelError(msg) from e
         self.torch = torch
-        obj = torch.load(filename, map_location="cpu", mmap=True, weights_only=True)
+        try:
+            obj = torch.load(filename, map_location="cpu", mmap=True, weights_only=True)
+        except (RuntimeError, pickle.UnpicklingError) as e:
+            msg = f"Cannot load {filename} as a PyTorch checkpoint: {e}"
+            raise UnsupportedModelError(msg) from e
         if isinstance(obj, dict) and "state_dict" in obj and isinstance(obj["state_dict"], dict):
             obj = obj["state_dict"]
         if not isinstance(obj, dict):
@@ -278,12 +286,12 @@ def render(
             say(f"  -> {target}")
         if show_with:
             if target is not None:
-                subprocess.call((show_with, str(target)))  # noqa: S603
+                subprocess.call((*shlex.split(show_with), str(target)))  # noqa: S603
             else:
                 with tempfile.NamedTemporaryFile(suffix=".png") as fp:
                     img.save(fp, format="png")
                     fp.flush()
-                    subprocess.call((show_with, fp.name))  # noqa: S603
+                    subprocess.call((*shlex.split(show_with), fp.name))  # noqa: S603
     return written
 
 
@@ -334,14 +342,14 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     p.add_argument("--match-1d", action="store_true", help="also render 1-D tensors when matching")
     p.add_argument(
         "--adjust-1d-rows",
-        type=int,
+        type=positive_int,
         metavar="N",
         help="fold a 1-D tensor into N rows instead of one long row",
     )
-    p.add_argument("--scale", type=float, default=1.0, help="resize factor (default: 1.0)")
+    p.add_argument("--scale", type=positive_float, default=1.0, help="resize factor (default: 1.0)")
     p.add_argument(
         "--max-pixels",
-        type=int,
+        type=non_negative_int,
         default=0,
         metavar="N",
         help="mean-pool tensors larger than N pixels before rendering (default: no limit)",
@@ -366,7 +374,7 @@ def run(args: argparse.Namespace) -> int:
         print("error: rendering needs Pillow: pip install 'ggufkit[viz]'", file=sys.stderr)
         return 2
 
-    log = None if args.quiet else print
+    log = None if args.quiet else to_stderr
     source = open_source(args.model, args.model_type)
     try:
         names = select_names(
@@ -378,7 +386,7 @@ def run(args: argparse.Namespace) -> int:
         )
         if not names:
             print("error: no tensors matched", file=sys.stderr)
-            return 1
+            return 2
         opts = RenderOptions(
             mode=args.mode,
             adjust_1d_rows=args.adjust_1d_rows,

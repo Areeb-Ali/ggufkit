@@ -5,7 +5,7 @@ dependence on where in the file a value happened to be stored. The full specific
 ``docs/FINGERPRINT.md``; this module is its reference implementation.
 
 Why not just hash the file? Because two GGUF files with identical weights routinely differ in
-bytes: metadata gets reordered or edited by ``gguf_set_metadata``, a model gets split into
+bytes: metadata gets reordered or edited by ``gguf-set-metadata``, a model gets split into
 shards, alignment padding changes. A content hash that ignores all of that lets you answer
 "is this the same model?" and "did only the metadata change?" without re-downloading anything.
 """
@@ -32,6 +32,7 @@ CHUNK_SIZE = 64 << 20
 
 _KV_TAG = b"kv\0"
 _TI_TAG = b"ti\0"
+_WT_TAG = b"wt\0"
 
 _SCALAR_TYPES = frozenset(
     {
@@ -151,7 +152,7 @@ def tensor_data_digest(
 
     Quantized blocks mix scales and packed values, so their byte order cannot be normalized
     without decoding the block layout. Big-endian quantized files are refused rather than
-    silently fingerprinted differently; convert them with llama.cpp's ``gguf_convert_endian``.
+    silently fingerprinted differently; convert them with llama.cpp's ``gguf-convert-endian``.
     """
     data = tensor.data
     if is_element_type(tensor):
@@ -160,7 +161,7 @@ def tensor_data_digest(
     elif file_endianess == GGUFEndian.BIG:
         msg = (
             f"Tensor {tensor.name!r} is {tensor.tensor_type.name} in a big-endian file; "
-            "convert the file to little-endian first (gguf_convert_endian)"
+            "convert the file to little-endian first (gguf-convert-endian)"
         )
         raise UnsupportedModelError(msg)
 
@@ -169,6 +170,20 @@ def tensor_data_digest(
     for start in range(0, flat.size, chunk_size):
         digest.update(flat[start : start + chunk_size])
     return digest.digest()
+
+
+def encode_weight(name: str, data_digest: bytes) -> bytes:
+    """Canonical encoding of one tensor's data under its name: tag, name, data digest.
+
+    Binding the name to the bytes is what makes swapping the data of two tensors with the
+    same shape and type show up in ``weights``.
+    """
+    raw = name.encode("utf-8")
+    return _WT_TAG + _u64(len(raw)) + raw + data_digest
+
+
+def weight_digest(name: str, data_digest: bytes) -> bytes:
+    return sha256(encode_weight(name, data_digest)).digest()
 
 
 def combine(digests: Iterable[bytes]) -> bytes:

@@ -1,7 +1,9 @@
 # ggufkit-manifest/1: provenance records for GGUF models
 
-Status: draft, implemented by `ggufkit.manifest`. Readers must check `schema` and refuse
-versions they do not know.
+Status: stable since ggufkit 0.1.0, implemented by `ggufkit.manifest`. Readers must check
+`schema` and refuse versions they do not know. Within `ggufkit-manifest/1`, later releases
+only add optional fields; removing or renaming a field, or changing its meaning, needs a new
+schema id.
 
 ## Why
 
@@ -22,6 +24,17 @@ ggufkit manifest model-Q4_K_M.gguf \
 
 This writes `model-Q4_K_M.manifest.json` next to the model. Publish it with the model; anyone
 can then run `ggufkit verify model-Q4_K_M.gguf --manifest model-Q4_K_M.manifest.json`.
+
+Other options:
+
+- `-o FILE` writes the manifest elsewhere; `-o -` prints it instead of writing a file.
+- `--note TEXT` stores a free-text note, for example where the source came from.
+- `--no-per-tensor` leaves out the per-tensor digests, which makes the manifest much smaller.
+  `verify` can then still tell that the weights changed, but not which tensor.
+- `--no-data` leaves out the weight digests entirely (instant on any size). `verify` against
+  such a manifest cannot compare weights, and fails unless it is run with `--no-data` too.
+- `--force` overwrites an existing manifest. Output is written to a temporary file and moved
+  into place, so an interrupted run never leaves a half-written manifest.
 
 ## Fields
 
@@ -69,14 +82,28 @@ ggufkit verify model.gguf --against other.gguf                       # two files
 |---|---|
 | `identical` | metadata, tensor descriptors and weights all match |
 | `metadata-only` | only metadata differs; the report lists the keys |
-| `tensor-info-only` | only tensor descriptors differ (renamed or retyped in place, same bytes) |
+| `tensor-info-only` | only tensor descriptors differ: renamed, retyped or reshaped in place, every tensor's bytes unchanged |
 | `metadata-and-tensor-info` | both of the above, weights untouched |
-| `weights-changed` | the bytes of at least one tensor differ, or tensors were added or removed |
+| `weights-changed` | the bytes of at least one tensor differ, bytes moved between tensors, or tensors were added or removed |
 
-Exit status: `0` for `identical` (and for `metadata-only` with `--allow-metadata`), `1` for any
-other verdict or a raw file hash mismatch, `2` for errors. `--ignore-keys 'general.name,tokenizer.chat_template'`
-excludes keys you expect to change. A manifest made with `--no-data` carries no weights digest,
-so verification against it says `weights: not compared`.
+A rename counts as `tensor-info-only` only when the per-tensor digests show the same bytes
+under the new name; without per-tensor digests (`--no-per-tensor`) any change in `weights`
+is reported as `weights-changed`.
+
+Exit status:
+
+- `0` for `identical`, and for `metadata-only` with `--allow-metadata`;
+- `1` for any other verdict, for a raw file hash that differs or was not recorded, and when
+  the weights could not be compared;
+- `2` for errors.
+
+`--ignore-keys 'general.name,tokenizer.chat_template'` excludes keys you expect to change.
+
+A manifest made with `manifest --no-data` carries no weight digests. Checking a file against
+it reports `weights  not compared` and **fails**, so a script that trusts the exit status
+cannot be handed a file whose weights nobody checked. Pass `verify --no-data` to ask for a
+metadata-and-descriptors check on purpose. Likewise, `--file-sha256` against a manifest made
+without `--file-sha256` reports `files  not checked` and fails.
 
 ## Signing
 
@@ -89,6 +116,9 @@ next to the manifest: one `subject` per file, identified by its raw sha256, `pre
 `https://github.com/MysterionRise/ggufkit/manifest/v1`, and the manifest as `predicate`. It
 implies `--file-sha256`.
 
+The predicate type is an identifier, not a web page: it does not need to resolve, and it
+will not change for `ggufkit-manifest/1`, so attestations made today stay verifiable.
+
 ```sh
 ggufkit manifest model.gguf --intoto model.intoto.json
 ```
@@ -100,7 +130,7 @@ the model file, signs it, and checks it later:
 
 ```sh
 # producer
-cosign attest-blob --key cosign.key \
+COSIGN_MAX_ATTACHMENT_SIZE=64GiB cosign attest-blob --key cosign.key \
   --predicate model.manifest.json \
   --type https://github.com/MysterionRise/ggufkit/manifest/v1 \
   --bundle model.sigstore.json model.gguf

@@ -75,7 +75,9 @@ def test_metadata_edit_changes_only_kv(tmp_path: Path) -> None:
     assert fa.overall != fb.overall
 
 
-def test_tensor_rename_changes_only_tensor_info(tmp_path: Path) -> None:
+def test_tensor_rename_keeps_the_tensor_data_digest(tmp_path: Path) -> None:
+    """``weights`` binds each name to its bytes, so a rename changes it, but the renamed
+    tensor's own data digest is unchanged, which is how ``verify`` recognizes a rename."""
     tensors = tiny_tensors()
     a = write_gguf(tmp_path / "a.gguf", kv=tiny_kv(), tensors=tensors)[0]
     tensors["blk.0.attn_q.weight.renamed"] = tensors.pop("blk.0.attn_q.weight")
@@ -83,7 +85,10 @@ def test_tensor_rename_changes_only_tensor_info(tmp_path: Path) -> None:
     fa, fb = fingerprint_of(a), fingerprint_of(b)
     assert fa.kv == fb.kv
     assert fa.tensor_info != fb.tensor_info
-    assert fa.weights == fb.weights
+    assert fa.weights != fb.weights
+    assert fa.tensors is not None
+    assert fb.tensors is not None
+    assert fa.tensors["blk.0.attn_q.weight"].data == fb.tensors["blk.0.attn_q.weight.renamed"].data
 
 
 def test_weight_change_is_attributed_to_the_tensor(tiny_gguf: Path) -> None:

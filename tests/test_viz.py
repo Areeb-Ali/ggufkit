@@ -140,7 +140,7 @@ def test_cli_reports_no_match(tiny_gguf: Path, tmp_path: Path) -> None:
                 str(tmp_path / "x.png"),
             ]
         )
-        == 1
+        == 2
     )
 
 

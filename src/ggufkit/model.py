@@ -10,7 +10,9 @@ rest of ggufkit can treat split and unsplit models identically.
 from __future__ import annotations
 
 import gc
+import mmap
 import re
+import struct
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +45,125 @@ class ModelError(ValueError):
     """Raised when a model cannot be opened as a consistent whole."""
 
 
+#: Byte sizes of the fixed-size GGUF metadata value types, by type id.
+_SCALAR_SIZES = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+_STRING, _ARRAY = 8, 9
+_MAX_DIMS = 4
+_MAX_ARRAY_DEPTH = 8
+
+
+class _HeaderCheck:
+    """Walk a GGUF header and reject sizes that cannot fit in the file.
+
+    gguf-py's reader trusts the counts and lengths it reads: an array that claims 2**40 items
+    in a 49-byte file makes it loop and allocate until memory runs out. This walk reads every
+    declared length and count first and refuses the file as soon as one of them exceeds the
+    bytes that are left, so hostile files fail fast instead of hanging.
+    """
+
+    def __init__(self, buf: mmap.mmap, path: Path) -> None:
+        self.buf = buf
+        self.path = path
+        self.pos = 0
+        self.end = len(buf)
+        self.order = "<"
+
+    def fail(self, why: str) -> None:
+        msg = f"{self.path}: not a valid GGUF file: {why}"
+        raise ModelError(msg)
+
+    def take(self, n: int) -> int:
+        if n < 0 or n > self.end - self.pos:
+            self.fail(f"truncated at byte {self.pos}")
+        start = self.pos
+        self.pos += n
+        return start
+
+    def u32(self) -> int:
+        return int(struct.unpack_from(self.order + "I", self.buf, self.take(4))[0])
+
+    def u64(self) -> int:
+        return int(struct.unpack_from(self.order + "Q", self.buf, self.take(8))[0])
+
+    def string(self) -> None:
+        at = self.pos
+        n = self.u64()
+        if n > self.end - self.pos:
+            self.fail(f"the string at byte {at} claims {n} bytes")
+        self.pos += n
+
+    def value(self, vtype: int, depth: int = 0) -> None:
+        if vtype in _SCALAR_SIZES:
+            self.take(_SCALAR_SIZES[vtype])
+        elif vtype == _STRING:
+            self.string()
+        elif vtype == _ARRAY:
+            at = self.pos
+            item = self.u32()
+            count = self.u64()
+            if item in _SCALAR_SIZES:
+                if count * _SCALAR_SIZES[item] > self.end - self.pos:
+                    self.fail(f"the array at byte {at} claims {count} items")
+                self.pos += count * _SCALAR_SIZES[item]
+                return
+            if item not in (_STRING, _ARRAY):
+                self.fail(f"the array at byte {at} has unknown item type {item}")
+            if depth >= _MAX_ARRAY_DEPTH:
+                self.fail(f"arrays nested more than {_MAX_ARRAY_DEPTH} deep at byte {at}")
+            smallest = 8 if item == _STRING else 12
+            if count * smallest > self.end - self.pos:
+                self.fail(f"the array at byte {at} claims {count} items")
+            for _ in range(count):
+                self.value(item, depth + 1)
+        else:
+            self.fail(f"unknown value type {vtype} at byte {self.pos - 4}")
+
+    def run(self) -> None:
+        if self.end < 24 or self.buf[:4] != b"GGUF":
+            self.fail("no GGUF header")
+        version = int(struct.unpack_from("<I", self.buf, 4)[0])
+        if version & 0xFFFF == 0:  # written big-endian
+            self.order = ">"
+            version = int(struct.unpack_from(">I", self.buf, 4)[0])
+        if version not in (2, 3):
+            self.fail(f"unsupported GGUF version {version}")
+        self.pos = 8
+        n_tensors = self.u64()
+        n_kv = self.u64()
+        left = self.end - self.pos
+        if n_kv * 13 > left or n_tensors * 24 > left:
+            self.fail(f"it declares {n_kv} metadata entries and {n_tensors} tensors")
+        for _ in range(n_kv):
+            self.string()
+            self.value(self.u32())
+        for _ in range(n_tensors):
+            self.string()
+            n_dims = self.u32()
+            if n_dims > _MAX_DIMS:
+                self.fail(f"a tensor declares {n_dims} dimensions")
+            self.take(8 * n_dims + 4 + 8)
+
+
+def check_header(path: Path) -> None:
+    """Raise :class:`ModelError` unless ``path`` has a GGUF header whose sizes fit the file."""
+    size = path.stat().st_size
+    if size < 24:
+        msg = f"{path}: not a valid GGUF file: only {size} bytes"
+        raise ModelError(msg)
+    with path.open("rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as buf:
+        _HeaderCheck(buf, path).run()
+
+
+def read_gguf(path: Path) -> GGUFReader:
+    """Open one GGUF file, turning anything the reader chokes on into :class:`ModelError`."""
+    check_header(path)
+    try:
+        return GGUFReader(path, "r")
+    except (ValueError, IndexError, KeyError, OverflowError, TypeError, struct.error) as e:
+        msg = f"{path}: not a valid GGUF file: {e}"
+        raise ModelError(msg) from e
+
+
 def shard_paths(path: str | Path) -> list[Path]:
     """Return every file of the model ``path`` belongs to, in shard order.
 
@@ -54,6 +175,10 @@ def shard_paths(path: str | Path) -> list[Path]:
     if match is None:
         return [path]
     count = int(match["count"])
+    number = int(match["no"])
+    if count == 0 or not 1 <= number <= count:
+        msg = f"{path.name}: shard {number} of {count} is not a valid shard number"
+        raise ModelError(msg)
     stem = match["stem"]
     paths = [path.with_name(f"{stem}-{i:05d}-of-{count:05d}.gguf") for i in range(1, count + 1)]
     missing = [p.name for p in paths if not p.is_file()]
@@ -133,8 +258,18 @@ class Model:
 def open_model(path: str | Path) -> Model:
     """Open ``path`` and any sibling shards as a single :class:`Model`."""
     paths = shard_paths(path)
-    readers = [GGUFReader(p, "r") for p in paths]
+    readers: list[GGUFReader] = []
+    try:
+        readers.extend(read_gguf(p) for p in paths)
+        return _merge(paths, readers)
+    except BaseException:
+        # Drop the memory maps now, so a failed open does not keep the files locked (Windows).
+        readers.clear()
+        gc.collect()
+        raise
 
+
+def _merge(paths: list[Path], readers: list[GGUFReader]) -> Model:
     endians = {r.endianess for r in readers}
     if len(endians) > 1:
         msg = "Shards disagree on byte order"

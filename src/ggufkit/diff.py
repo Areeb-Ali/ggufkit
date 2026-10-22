@@ -21,6 +21,7 @@ import numpy as np
 from gguf import GGUFValueType
 
 from ggufkit import canon
+from ggufkit._util import non_negative_int, positive_int
 from ggufkit.dequant import can_dequantize, to_f32
 from ggufkit.fingerprint import default_jobs, fingerprint
 from ggufkit.model import open_model
@@ -336,6 +337,17 @@ def format_numeric(stats: list[NumericStats], top: int) -> list[str]:
     return lines
 
 
+def _finite(value: Any) -> Any:
+    """``value`` with NaN and infinities replaced by None: JSON has no way to spell them."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_finite(v) for v in value]
+    return value
+
+
 def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "diff",
@@ -360,7 +372,7 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     )
     p.add_argument(
         "--top",
-        type=int,
+        type=non_negative_int,
         default=20,
         help="numeric rows to print, worst first (0 = all; default: %(default)s)",
     )
@@ -372,14 +384,19 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     )
     p.add_argument("--same", action="store_true", help="also list unchanged entries")
     p.add_argument("--json", action="store_true", help="print the diff as JSON")
-    p.add_argument("-j", "--jobs", type=int, default=default_jobs(), help="hashing threads")
+    p.add_argument(
+        "-j", "--jobs", type=positive_int, default=default_jobs(), help="hashing threads"
+    )
     p.set_defaults(func=run)
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.no_kv and args.no_tensors and not args.numeric:
+        msg = "--no-kv and --no-tensors leave nothing to compare (add --numeric?)"
+        raise ValueError(msg)
     patterns = comma_list(args.tensor)
     ignore = comma_list(args.ignore_keys)
-    jobs = max(1, args.jobs)
+    jobs = args.jobs
     compare_tensors = not args.no_tensors or args.numeric
     result: dict[str, Any] = {"a": str(args.a), "b": str(args.b)}
     lines: list[str] = []
@@ -438,7 +455,7 @@ def run(args: argparse.Namespace) -> int:
 
     if args.json:
         result["different"] = different
-        json.dump(result, sys.stdout, indent=2)
+        json.dump(_finite(result), sys.stdout, indent=2, allow_nan=False)
         sys.stdout.write("\n")
     else:
         print("\n".join(lines))

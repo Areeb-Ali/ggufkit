@@ -115,6 +115,19 @@ def main() -> int:
         "UD-Q4_K_XL (Unsloth dynamic)",
     )
 
+    ggufkit(
+        "viz",
+        "tensor",
+        bf16,
+        PATCH_TENSOR,
+        "-o",
+        str(ASSETS / "tensor-attn_q.png"),
+        "--max-pixels",
+        MAX_PIXELS,
+        "--force",
+        "-q",
+    )
+
     ggufkit("fingerprint", q4km, "--no-per-tensor")
     manifest = work / "Qwen3-0.6B-Q4_K_M.manifest.json"
     ggufkit("manifest", q4km, "-o", str(manifest), "--file-sha256", "--force")

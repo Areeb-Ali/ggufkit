@@ -164,3 +164,8 @@ cython_debug/
 *.manifest.json
 /scratch/
 .ruff_cache/
+# Local signing runs (scripts/make_demos.py makes throwaway keys): never commit these.
+*.key
+*.sigstore.json
+*.intoto.json
+node_modules/

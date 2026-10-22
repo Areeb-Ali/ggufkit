@@ -1,15 +1,19 @@
 # ggufkit-fp/1: content fingerprints for GGUF models
 
-Status: draft, implemented by `ggufkit.canon` and `ggufkit.fingerprint`. The spec id
-`ggufkit-fp/1` is part of the hash input; any incompatible change gets a new id.
+Status: stable since ggufkit 0.1.0. Implemented by `ggufkit.canon` and
+`ggufkit.fingerprint`.
+
+The spec id `ggufkit-fp/1` is part of the hash input. A given file's `ggufkit-fp/1` digests
+will not change in any later ggufkit release; a change to what is hashed or how gets a new
+id (`ggufkit-fp/2`), and ggufkit keeps computing and verifying the old one.
 
 ## Why a file hash is not enough
 
 Two GGUF files that hold the same model routinely differ byte for byte:
 
-- metadata was added, edited or reordered (`gguf_set_metadata`, `gguf_new_metadata`, a Hub
+- metadata was added, edited or reordered (`gguf-set-metadata`, `gguf-new-metadata`, a Hub
   re-upload with a fixed chat template);
-- the model was split into shards with `gguf-split`, or merged back;
+- the model was split into shards with `llama-gguf-split`, or merged back;
 - tensors were written in a different order, or the alignment changed;
 - the file was converted between little- and big-endian.
 
@@ -84,19 +88,29 @@ For element types (F32, F16, F64, I8, I16, I32, I64) in a big-endian file, value
 byte-swapped to little-endian before hashing, so the fingerprint does not depend on byte
 order. Quantized types mix scales and packed values inside each block; their byte order
 cannot be normalized without decoding the block, so quantized tensors in big-endian files
-are refused in this version (convert with llama.cpp's `gguf_convert_endian` first).
+are refused in this version (convert with llama.cpp's `gguf-convert-endian` first).
 
 Alignment padding between tensors is never hashed.
+
+### Tensor data under its name: `E_wt`
+
+```
+E_wt = sha256( "wt\0" ‖ u64(len(name)) ‖ name ‖ D_t )
+```
 
 ### `weights`
 
 ```
-weights = sha256( D_1 ‖ D_2 ‖ … )   for digests sorted by their byte value
+weights = sha256( E_wt(name_1) ‖ E_wt(name_2) ‖ … )   for names in byte-wise UTF-8 order
 ```
 
-Sorting by digest rather than by name makes `weights` a hash of the *multiset* of tensor
-contents: renaming or reordering tensors leaves it unchanged. A rename still shows, in
-`tensor_info`.
+Each tensor's bytes are bound to its name. Swapping the data of two tensors with the same
+shape and type (two layers, or `ffn_gate` and `ffn_up` of one layer) changes `weights`, even
+though every name, shape, type and byte is still present. Reordering tensors in the file,
+splitting it into shards or changing the alignment does not.
+
+A rename changes `weights` and `tensor_info`, but not the renamed tensor's `D_t`. That is how
+`ggufkit verify` tells a rename (the same bytes under a new name) from new weights.
 
 ### `overall`
 
@@ -106,10 +120,10 @@ overall = sha256( "ggufkit-fp/1\0" ‖ kv ‖ tensor_info ‖ weights )
 
 ## Sharded models
 
-A model split with `gguf-split` is fingerprinted as one logical model: the metadata of all
-shards is merged (first shard wins on duplicate keys, `split.*` keys dropped), and the
-tensors of all shards are concatenated. The split and the merged file therefore have the
-same fingerprint.
+A model split with `llama-gguf-split` is fingerprinted as one logical model: the metadata
+of all shards is merged (first shard wins on duplicate keys; the three sharding keys listed
+above are dropped), and the tensors of all shards are concatenated. The split and the merged
+file therefore have the same fingerprint.
 
 ## Reading a comparison
 
@@ -117,8 +131,13 @@ same fingerprint.
 |---|---|---|---|
 | same | same | same | the same model (`overall` is equal too) |
 | differs | same | same | only metadata changed: names, templates, licence text, provenance keys |
-| same | differs | same | tensors were renamed or retyped in place, bytes untouched |
-| any | any | differs | at least one tensor's bytes changed; per-tensor `data` digests say which |
+| same | differs | same | tensors were retyped or reshaped in place, bytes untouched |
+| any | differs | differs | tensors were renamed, or the weights changed; the per-tensor `data` digests tell which |
+| any | same | differs | the weights changed: new bytes, or bytes moved between tensors |
+
+`ggufkit verify` reports a rename as `tensor-info-only` only when the per-tensor digests show
+that every tensor's bytes are unchanged and only their names moved; anything else is
+`weights-changed`.
 
 ## What a fingerprint does not prove
 
