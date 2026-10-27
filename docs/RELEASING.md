@@ -48,8 +48,9 @@ publishing).
    git push origin v0.1.0
    ```
 
-   (or create the release from GitHub's *Releases → Draft a new release*, with a new `v0.1.0`
-   tag on `main`).
+   Push the tag from the command line, not with GitHub's *Releases → Draft a new release*:
+   that creates the release itself, and the workflow's own `gh release create` then fails
+   because the release already exists.
 
 4. **Watch the workflow.** It checks that the tag matches `pyproject.toml` and is on `main`,
    runs CI, builds, smoke-tests and attests, then waits for your approval on the `pypi`
@@ -64,8 +65,13 @@ publishing).
 
    # Optional: check the build provenance of the published wheel.
    pip download ggufkit==0.1.0 --no-deps -d /tmp/dl
-   gh attestation verify /tmp/dl/ggufkit-0.1.0-py3-none-any.whl --repo MysterionRise/ggufkit
+   gh attestation verify /tmp/dl/ggufkit-0.1.0-py3-none-any.whl --repo MysterionRise/ggufkit \
+     --signer-workflow MysterionRise/ggufkit/.github/workflows/release.yml \
+     --source-ref refs/tags/v0.1.0
    ```
+
+   The wheel builds reproducibly, so dry runs attest the same bytes as the release and the
+   lookup finds their attestations too. `--source-ref` accepts only the one built from the tag.
 
    On https://pypi.org/project/ggufkit/ the files show a *Provenance* section (the PyPI
    attestations). The GitHub release page lists the wheel and sdist.
